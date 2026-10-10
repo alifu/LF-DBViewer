@@ -1,0 +1,40 @@
+[package]
+name = "lf-dbviewer"
+version = "0.1.0"
+description = "A light MySQL/MariaDB client"
+authors = ["alifu"]
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# Desktop only: a plain Rust library that the binary links against.
+name = "lf_dbviewer_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2.0.21"
+uuid = { version = "1.26.1", features = ["v4"] }
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "fs"] }
+mysql_async = { version = "0.37.1", features = ["native-tls-tls"] }
+russh = "0.63.1"
+keyring = { version = "3.6.3", features = ["apple-native"] }
+
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
+
+[dev-dependencies]
+tempfile = "3.27.0"
