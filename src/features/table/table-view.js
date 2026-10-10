@@ -1,17 +1,13 @@
 import { confirmDialog, h } from "../../lib/dom.js";
+import { displayCell, isSpecial } from "../grid/cell-format.js";
 import { createGrid } from "../grid/grid.js";
 import { FILTER_OPERATORS, describeFilter, makeFilter, nextSort } from "./filters.js";
-import { NO_CHANGES, addInsert, changeCount, editCell, editInsert, isSpecial, removeInsert, toChanges, toggleDeleted } from "./pending.js";
+import { NO_CHANGES, addInsert, changeCount, editCell, editInsert, removeInsert, toChanges, toggleDeleted } from "./pending.js";
 
 const PAGE_ROWS = 500;
 /** Rows kept in memory per tab. Past this, narrow the result with a filter. */
 const MAX_LOADED_ROWS = 200_000;
 const numberFormat = new Intl.NumberFormat("en-US");
-
-function describeSpecial(cell) {
-  const size = `${numberFormat.format(cell.size)} bytes`;
-  return cell.kind === "binary" ? `0x${cell.preview}… (${size})` : `${cell.preview}… (${size})`;
-}
 
 /**
  * One table or view: filter bar, virtualized grid, and pending edits.
@@ -76,9 +72,8 @@ export function createTableView({ tab, data }) {
     const isEdited = edits !== undefined && name in edits;
     const cell = isEdited ? edits[name] : rows[row][col];
     const className = isEdited ? "edited" : "";
-    if (cell === null) return { text: "NULL", className: `muted ${className}` };
-    if (isSpecial(cell)) return { text: describeSpecial(cell), className: "muted" };
-    return { text: cell, className };
+    const shown = displayCell(cell);
+    return { text: shown.text, className: `${shown.className} ${className}`.trim() };
   }
 
   function canEdit(row, col) {

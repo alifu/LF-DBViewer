@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use mysql_async::prelude::Queryable;
-use mysql_async::{Conn, OptsBuilder, Pool, PoolConstraints, PoolOpts, SslOpts};
+use mysql_async::{Conn, Opts, OptsBuilder, Pool, PoolConstraints, PoolOpts, SslOpts};
 use tokio::sync::RwLock;
 
 use super::model::{
@@ -24,6 +24,7 @@ pub struct ActiveConnection {
     info: ConnectionInfo,
     profile: ConnectionProfile,
     secrets: ConnectionSecrets,
+    opts: Opts,
     pool: Pool,
     tunnel: Option<SshTunnel>,
 }
@@ -31,6 +32,19 @@ pub struct ActiveConnection {
 impl ActiveConnection {
     pub async fn conn(&self) -> AppResult<Conn> {
         Ok(self.pool.get_conn().await?)
+    }
+
+    /// A connection of its own, outside the pool, for a query tab's session.
+    pub async fn open_session_conn(&self) -> AppResult<Conn> {
+        let connect = async { Ok(Conn::new(self.opts.clone()).await?) };
+        within(CONNECT_TIMEOUT, "opening a query session", connect).await
+    }
+
+    /// Stops the statement a session is running, from a different connection.
+    pub async fn kill_query(&self, thread_id: u32) -> AppResult<()> {
+        let mut conn = self.conn().await?;
+        conn.query_drop(format!("KILL QUERY {thread_id}")).await?;
+        Ok(())
     }
 
     async fn shut_down(&self) {
@@ -125,11 +139,8 @@ async fn establish(
     };
 
     let tunnel_port = tunnel.as_ref().map(SshTunnel::local_port);
-    let pool = Pool::new(driver_opts(
-        &profile,
-        secrets.password.as_deref(),
-        tunnel_port,
-    )?);
+    let opts: Opts = driver_opts(&profile, secrets.password.as_deref(), tunnel_port)?.into();
+    let pool = Pool::new(opts.clone());
     let version = match within(
         CONNECT_TIMEOUT,
         "connecting to the database",
@@ -163,6 +174,7 @@ async fn establish(
         info,
         profile,
         secrets,
+        opts,
         pool,
         tunnel,
     })

@@ -38,7 +38,8 @@ function objectTab(tab, activeTabId, actions) {
     "div",
     { class: tab.id === activeTabId ? "object-tab active" : "object-tab", title: `${tab.database}.${tab.name} (${tab.kind})`, onClick: () => actions.activateTab(tab.id) },
     h("span", {}, tab.name),
-    h("span", { class: "muted" }, tab.database),
+    // A query tab's database can change while it is open, so only object tabs show it.
+    tab.kind !== "query" && h("span", { class: "muted" }, tab.database),
     closeButton(`Close ${tab.name}`, () => actions.closeTab(tab.id)),
   );
 }
@@ -86,7 +87,9 @@ export function createWorkspace({ actions, logPanel, createTabView }) {
     if (!views.has(tab.id)) views.set(tab.id, createTabView(tab));
     if (shownTabId === tab.id) return;
     shownTabId = tab.id;
-    host.replaceChildren(views.get(tab.id).element);
+    const view = views.get(tab.id);
+    host.replaceChildren(view.element);
+    view.focus?.();
   }
 
   return {
@@ -97,7 +100,10 @@ export function createWorkspace({ actions, logPanel, createTabView }) {
       const active = state.connections.find((connection) => connection.id === state.activeConnectionId) ?? null;
       activeId = active?.id ?? null;
       for (const id of [...views.keys()]) {
-        if (!state.tabs.some((tab) => tab.id === id)) views.delete(id);
+        if (state.tabs.some((tab) => tab.id === id)) continue;
+        views.get(id).destroy?.();
+        views.delete(id);
+        if (shownTabId === id) shownTabId = null;
       }
       if (state.connections !== previous?.connections || state.activeConnectionId !== previous?.activeConnectionId) {
         tabs.replaceChildren(...state.connections.map((connection) => connectionTab(connection, activeId, actions)));
@@ -124,6 +130,10 @@ export function createWorkspace({ actions, logPanel, createTabView }) {
       if (!sameContext || state.tabs !== previous?.tabs || state.activeTabIds !== previous?.activeTabIds) {
         objectTabs.replaceChildren(...connectionTabs.map((tab) => objectTab(tab, activeTabId, actions)));
         showTab(activeTab);
+      }
+      if (activeTab !== null && (!sameContext || state.schemas !== previous?.schemas || state.activeTabIds !== previous?.activeTabIds)) {
+        const { databases, objects } = schemaOf(state, active.id);
+        views.get(activeTab.id)?.update?.({ databases: databases.map((database) => database.name), objects });
       }
     },
   };

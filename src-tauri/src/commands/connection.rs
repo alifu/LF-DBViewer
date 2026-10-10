@@ -76,6 +76,7 @@ pub async fn test_connection(
 
 #[tauri::command]
 pub async fn close_connection(state: State<'_, AppState>, connection_id: String) -> AppResult<()> {
+    state.sessions.close_for_connection(&connection_id).await;
     state.connections.close(&connection_id).await
 }
 

@@ -8,9 +8,8 @@
 
 export const NO_CHANGES = Object.freeze({ edits: {}, deleted: {}, inserts: [] });
 
-export function isSpecial(cell) {
-  return cell !== null && typeof cell === "object";
-}
+export { isSpecial } from "../grid/cell-format.js";
+import { isSpecial } from "../grid/cell-format.js";
 
 function without(object, key) {
   const { [key]: _removed, ...rest } = object;

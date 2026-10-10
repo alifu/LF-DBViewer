@@ -31,8 +31,9 @@ function twisty(open) {
 export function createSchemaTree({ actions }) {
   const search = h("input", { type: "search", placeholder: "Filter objects", "aria-label": "Filter objects", spellcheck: false });
   const list = h("div", { class: "tree", role: "tree" });
-  const element = h("div", { class: "schema-tree" }, h("div", { class: "tree-search" }, search), list);
   let last = null;
+  const newQuery = h("button", { type: "button", class: "new-query", title: "New query tab (⌘T)", onClick: () => last && actions.newQuery(last.connectionId) }, "New query");
+  const element = h("div", { class: "schema-tree" }, h("div", { class: "tree-search" }, newQuery, search), list);
   search.addEventListener("input", () => last && draw(last));
 
   function drawDatabase(connectionId, schema, database, activeTab) {

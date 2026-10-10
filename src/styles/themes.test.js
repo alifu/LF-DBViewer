@@ -39,6 +39,11 @@ const PAIRS = [
   ["--accent", "--surface", GRAPHIC],
   ["--focus", "--surface", GRAPHIC],
   ["--border", "--surface", 1.2],
+  ["--syn-keyword", "--surface", TEXT],
+  ["--syn-string", "--surface", TEXT],
+  ["--syn-number", "--surface", TEXT],
+  ["--syn-type", "--surface", TEXT],
+  ["--syn-comment", "--surface", TEXT],
 ];
 
 for (const [name, tokens] of Object.entries(themes)) {

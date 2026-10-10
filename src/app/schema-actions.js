@@ -39,6 +39,12 @@ export function createSchemaActions({ api, store }) {
     toggleDatabase,
     toggleGroup: (connectionId, database, group) =>
       store.update((state) => transitions.toggleExpanded(state, connectionId, groupKey(database, group))),
+    newQuery(connectionId, database) {
+      const state = store.getState();
+      const used = transitions.tabsOf(state, connectionId).filter((tab) => tab.kind === "query").map((tab) => Number(tab.name.replace("Query ", "")));
+      const name = `Query ${Math.max(0, ...used) + 1}`;
+      store.update((current) => transitions.openTab(current, { connectionId, database, name, kind: "query" }));
+    },
     openObject: (target) => store.update((state) => transitions.openTab(state, target)),
     activateTab: (id) => store.update((state) => transitions.activateTab(state, id)),
     closeTab: (id) => store.update((state) => transitions.closeTab(state, id)),

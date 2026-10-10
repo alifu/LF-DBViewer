@@ -4,6 +4,8 @@ import { createConnectionActions } from "./app/connection-actions.js";
 import { createSchemaActions } from "./app/schema-actions.js";
 import { createDashboard } from "./features/dashboard/dashboard.js";
 import { createLogPanel } from "./features/log/log-panel.js";
+import { createQueryActions } from "./app/query-actions.js";
+import { createQueryView } from "./features/query/query-view.js";
 import { createDefinitionView } from "./features/schema/definition-view.js";
 import { databaseKey } from "./features/schema/tree.js";
 import { openSettings } from "./features/settings/settings-dialog.js";
@@ -44,7 +46,7 @@ async function confirmLosingEdits(tabIds, what) {
   if (!workspace.hasUnsavedChanges(tabIds)) return true;
   return confirmDialog({
     title: "Discard unsaved changes?",
-    body: `${what} has row changes that were not applied.`,
+    body: `${what} has unsaved changes: edited rows or query text that was not run.`,
     confirmLabel: "Discard",
     danger: true,
   });
@@ -53,6 +55,7 @@ async function confirmLosingEdits(tabIds, what) {
 const workspaceActions = {
   ...schema,
   openSettings: showSettings,
+  newQuery,
   activate: connections.activate,
   newConnection: connections.newConnection,
   async close(id) {
@@ -70,7 +73,28 @@ const workspaceActions = {
   },
 };
 
+/** The database a new query starts in: the open tab's, else the connection's, else any open one in the tree. */
+function defaultDatabase(state, connectionId) {
+  const openTab = state.tabs.find((tab) => tab.id === state.activeTabIds[connectionId]);
+  const connection = state.connections.find((candidate) => candidate.id === connectionId);
+  const expanded = Object.keys(transitions.schemaOf(state, connectionId).expanded).find((key) => key.startsWith("db:"));
+  return openTab?.database ?? connection?.database ?? expanded?.slice("db:".length) ?? "";
+}
+
+function newQuery(connectionId) {
+  schema.newQuery(connectionId, defaultDatabase(store.getState(), connectionId));
+}
+
 function createTabView(tab) {
+  if (tab.kind === "query") {
+    const connection = store.getState().connections.find((candidate) => candidate.id === tab.connectionId);
+    return createQueryView({
+      tab,
+      connection,
+      data: createQueryActions({ api, log, connectionId: tab.connectionId }),
+      storage: browserStorage(window),
+    });
+  }
   if (DATA_KINDS.includes(tab.kind)) return createTableView({ tab, data: schema.tableData(tab) });
   return createDefinitionView({ load: () => schema.definition(tab) });
 }
@@ -90,9 +114,14 @@ function render(state, previous) {
 }
 
 window.addEventListener("keydown", (event) => {
-  if (event.metaKey && event.key === ",") {
+  if (!event.metaKey) return;
+  const state = store.getState();
+  if (event.key === ",") {
     event.preventDefault();
     showSettings();
+  } else if (event.key === "t" && state.view === transitions.VIEW.workspace && state.activeConnectionId !== null) {
+    event.preventDefault();
+    newQuery(state.activeConnectionId);
   }
 });
 

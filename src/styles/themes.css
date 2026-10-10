@@ -21,6 +21,11 @@
   --on-danger: #ffffff; /* Neutral0 */
   --changed: #b38600; /* Yellow600 */
   --focus: #1868db; /* Blue700 */
+  --syn-keyword: #803fa5; /* Purple800 */
+  --syn-string: #206a83; /* Teal800 */
+  --syn-number: #9e4c00; /* Orange800 */
+  --syn-type: #1558bc; /* Blue800 */
+  --syn-comment: #6b6e76; /* Neutral700 */
   --scrim: rgb(0 0 0 / 35%);
 }
 
@@ -42,6 +47,11 @@
   --on-danger: #111213; /* DarkNeutral-100 */
   --changed: #ddb30e; /* Yellow400 */
   --focus: #669df1; /* Blue400 */
+  --syn-keyword: #c97cf4; /* Purple400 */
+  --syn-string: #6cc3e0; /* Teal400 */
+  --syn-number: #fca700; /* Orange400 */
+  --syn-type: #669df1; /* Blue400 */
+  --syn-comment: #96999e; /* DarkNeutral700 */
   --scrim: rgb(0 0 0 / 55%);
 }
 
@@ -64,6 +74,11 @@
     --on-danger: #111213; /* DarkNeutral-100 */
     --changed: #ddb30e; /* Yellow400 */
     --focus: #669df1; /* Blue400 */
+    --syn-keyword: #c97cf4; /* Purple400 */
+    --syn-string: #6cc3e0; /* Teal400 */
+    --syn-number: #fca700; /* Orange400 */
+    --syn-type: #669df1; /* Blue400 */
+    --syn-comment: #96999e; /* DarkNeutral700 */
     --scrim: rgb(0 0 0 / 55%);
   }
 }

@@ -1,5 +1,7 @@
 //! Reads what exists on the server: databases, their objects, and table columns.
 
+use std::collections::BTreeMap;
+
 use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, Row};
 use serde::{Deserialize, Serialize};
@@ -199,6 +201,34 @@ pub async fn table_columns(
         )));
     }
     Ok(rows.into_iter().map(texts).map(column_from_row).collect())
+}
+
+/// Column names of every table and view in a database, for autocomplete. Capped so a
+/// huge schema cannot make the editor slow.
+pub const MAX_AUTOCOMPLETE_COLUMNS: usize = 20_000;
+
+pub async fn database_column_names(
+    conn: &mut Conn,
+    database: &str,
+) -> AppResult<BTreeMap<String, Vec<String>>> {
+    let rows: Vec<Row> = conn
+        .exec(
+            format!(
+                "SELECT TABLE_NAME, COLUMN_NAME FROM information_schema.COLUMNS \
+                 WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME, ORDINAL_POSITION LIMIT {MAX_AUTOCOMPLETE_COLUMNS}"
+            ),
+            (database,),
+        )
+        .await?;
+    let mut tables: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for row in rows {
+        let values = texts(row);
+        tables
+            .entry(required(values.first()))
+            .or_default()
+            .push(required(values.get(1)));
+    }
+    Ok(tables)
 }
 
 /// The `CREATE …` statement for an object, as the server reports it.
