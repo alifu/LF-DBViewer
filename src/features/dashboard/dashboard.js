@@ -143,6 +143,7 @@ export function createDashboard({ actions }) {
       h("div", { class: "panel-header" }, h("strong", {}, "Saved connections"), h("span", { class: "spacer" }), backButton),
       list,
       h("button", { type: "button", onClick: () => draw(EMPTY_FORM) }, "New connection"),
+      h("button", { type: "button", class: "ghost", onClick: () => actions.openSettings() }, "Settings"),
     ),
     h("section", { class: "dashboard-main" }, form),
   );

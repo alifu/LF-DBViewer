@@ -7,7 +7,7 @@
 .profile { display: flex; flex-direction: column; padding: 7px 10px; border-radius: var(--radius); overflow: hidden; }
 .profile span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .profile:hover { background: var(--surface); }
-.profile.selected { background: var(--accent); color: var(--accent-text); }
+.profile.selected { background: var(--accent); color: var(--on-accent); }
 .profile.selected .muted { color: inherit; opacity: 0.85; }
 
 .profile-form { max-width: 640px; }

@@ -19,7 +19,7 @@
 .tree-node:hover { background: var(--surface-2); }
 .tree-node.group { padding-left: 22px; }
 .tree-node.leaf { display: block; padding-left: 44px; }
-.tree-node.active { background: var(--accent); color: var(--accent-text); }
+.tree-node.active { background: var(--accent); color: var(--on-accent); }
 .twisty { width: 12px; flex: none; color: var(--muted); }
 
 .object-tabs { display: flex; gap: 2px; padding: 4px 6px 0; overflow-x: auto; background: var(--surface-2); border-bottom: 1px solid var(--border); }
@@ -49,7 +49,7 @@
 .sort-mark { color: var(--accent); }
 .row-number { position: sticky; left: 0; z-index: 1; background: var(--surface-2); color: var(--muted); text-align: right; }
 .grid-cell.selected { outline: 2px solid var(--accent); outline-offset: -2px; }
-.grid-cell.edited { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.grid-cell.edited { background: color-mix(in srgb, var(--changed) 26%, transparent); }
 .grid-row.deleted .grid-cell:not(.row-number) { background: color-mix(in srgb, var(--danger) 18%, transparent); text-decoration: line-through; }
 .grid-row.inserted .grid-cell:not(.row-number) { background: color-mix(in srgb, var(--ok) 16%, transparent); }
 .grid-editor { width: 100%; height: 22px; padding: 0 !important; border: none !important; border-radius: 0 !important; font: inherit; background: var(--surface) !important; }

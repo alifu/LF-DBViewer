@@ -71,6 +71,7 @@ export function createWorkspace({ actions, logPanel, createTabView }) {
       h("span", { class: "spacer" }),
       status,
       reload,
+      h("button", { type: "button", class: "ghost", title: "Settings (⌘,)", onClick: () => actions.openSettings() }, "Settings"),
     ),
     h("div", { class: "workspace-body" }, h("aside", { class: "sidebar" }, tree.element), h("section", { class: "content" }, objectTabs, host)),
     logPanel.element,

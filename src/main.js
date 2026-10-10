@@ -6,6 +6,8 @@ import { createDashboard } from "./features/dashboard/dashboard.js";
 import { createLogPanel } from "./features/log/log-panel.js";
 import { createDefinitionView } from "./features/schema/definition-view.js";
 import { databaseKey } from "./features/schema/tree.js";
+import { openSettings } from "./features/settings/settings-dialog.js";
+import { browserStorage, createThemeController } from "./features/settings/theme.js";
 import { createTableView } from "./features/table/table-view.js";
 import { createWorkspace } from "./features/workspace/workspace.js";
 import { createApi } from "./lib/api.js";
@@ -15,6 +17,14 @@ import * as transitions from "./state/app-state.js";
 
 const PING_INTERVAL_MS = 15_000;
 const DATA_KINDS = ["table", "view"];
+
+// Applied before anything renders, so the first paint already has the right colours.
+const theme = createThemeController({
+  root: document.documentElement,
+  storage: browserStorage(window),
+  matchMedia: (query) => window.matchMedia(query),
+});
+const showSettings = () => openSettings({ theme });
 
 const store = createStore(transitions.initialState);
 const log = (entry) => store.update((state) => transitions.appendLog(state, { ...entry, time: new Date() }));
@@ -28,7 +38,7 @@ async function showSchema(info) {
   if (info.database && isClosed) await schema.toggleDatabase(info.id, info.database);
 }
 
-const connections = createConnectionActions({ api, store, log, onConnected: showSchema });
+const connections = { ...createConnectionActions({ api, store, log, onConnected: showSchema }), openSettings: showSettings };
 
 async function confirmLosingEdits(tabIds, what) {
   if (!workspace.hasUnsavedChanges(tabIds)) return true;
@@ -42,6 +52,7 @@ async function confirmLosingEdits(tabIds, what) {
 
 const workspaceActions = {
   ...schema,
+  openSettings: showSettings,
   activate: connections.activate,
   newConnection: connections.newConnection,
   async close(id) {
@@ -77,6 +88,13 @@ function render(state, previous) {
   workspace.render(state, previous);
   if (state.log !== previous?.log) logPanel.render(state.log);
 }
+
+window.addEventListener("keydown", (event) => {
+  if (event.metaKey && event.key === ",") {
+    event.preventDefault();
+    showSettings();
+  }
+});
 
 store.subscribe(render);
 render(store.getState(), null);

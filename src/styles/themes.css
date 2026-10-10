@@ -1,0 +1,69 @@
+/*
+ * Colour tokens. Values come from the Atlassian Design palette (@atlaskit/tokens 20.4.1).
+ * The pre-JS dark block below must match the explicit dark block; a test enforces it.
+ */
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f8f8f8; /* Neutral100 */
+  --surface: #ffffff; /* Neutral0 */
+  --surface-2: #f0f1f2; /* Neutral200 */
+  --border: #dddee1; /* Neutral300 */
+  --text: #292a2e; /* Neutral1000 */
+  --muted: #6b6e76; /* Neutral700 */
+  --accent: #1f845a; /* Green700 */
+  --accent-hover: #216e4e; /* Green800 */
+  --on-accent: #ffffff; /* Neutral0 */
+  --accent-subtle: #dcfff1; /* Green100 */
+  --ok: #216e4e; /* Green800 */
+  --danger: #c9372c; /* Red700 */
+  --danger-solid: #c9372c; /* Red700 */
+  --on-danger: #ffffff; /* Neutral0 */
+  --changed: #b38600; /* Yellow600 */
+  --focus: #1868db; /* Blue700 */
+  --scrim: rgb(0 0 0 / 35%);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #18191a; /* DarkNeutral0 */
+  --surface: #1f1f21; /* DarkNeutral100 */
+  --surface-2: #2b2c2f; /* DarkNeutral250 */
+  --border: #3d3f43; /* DarkNeutral350 */
+  --text: #e2e3e4; /* DarkNeutral1100 */
+  --muted: #a9abaf; /* DarkNeutral800 */
+  --accent: #4bce97; /* Green400 */
+  --accent-hover: #7ee2b8; /* Green300 */
+  --on-accent: #111213; /* DarkNeutral-100 */
+  --accent-subtle: #1c3329; /* Green1000 */
+  --ok: #4bce97; /* Green400 */
+  --danger: #f87168; /* Red400 */
+  --danger-solid: #f87168; /* Red400 */
+  --on-danger: #111213; /* DarkNeutral-100 */
+  --changed: #ddb30e; /* Yellow400 */
+  --focus: #669df1; /* Blue400 */
+  --scrim: rgb(0 0 0 / 55%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+    --bg: #18191a; /* DarkNeutral0 */
+    --surface: #1f1f21; /* DarkNeutral100 */
+    --surface-2: #2b2c2f; /* DarkNeutral250 */
+    --border: #3d3f43; /* DarkNeutral350 */
+    --text: #e2e3e4; /* DarkNeutral1100 */
+    --muted: #a9abaf; /* DarkNeutral800 */
+    --accent: #4bce97; /* Green400 */
+    --accent-hover: #7ee2b8; /* Green300 */
+    --on-accent: #111213; /* DarkNeutral-100 */
+    --accent-subtle: #1c3329; /* Green1000 */
+    --ok: #4bce97; /* Green400 */
+    --danger: #f87168; /* Red400 */
+    --danger-solid: #f87168; /* Red400 */
+    --on-danger: #111213; /* DarkNeutral-100 */
+    --changed: #ddb30e; /* Yellow400 */
+    --focus: #669df1; /* Blue400 */
+    --scrim: rgb(0 0 0 / 55%);
+  }
+}
