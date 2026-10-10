@@ -84,6 +84,9 @@ fn driver_opts(
         .socket(profile.socket.as_deref())
         .prefer_socket(profile.socket.is_some())
         .ssl_opts(ssl_opts(profile))
+        // Report rows matched rather than rows changed, so an edit that sets a value to
+        // what it already is still counts as having found its row.
+        .client_found_rows(true)
         .pool_opts(pool_opts()?))
 }
 

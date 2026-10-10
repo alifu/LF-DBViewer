@@ -1,12 +1,20 @@
 mod commands;
 mod connection;
 mod error;
+#[cfg(test)]
+mod live_tests;
+mod query;
+mod schema;
+mod sql;
 mod state;
 mod storage;
 
 use tauri::Manager;
 
-use commands::{connection as connection_commands, profile as profile_commands};
+use commands::{
+    connection as connection_commands, data as data_commands, profile as profile_commands,
+    schema as schema_commands,
+};
 use state::AppState;
 
 pub fn run() {
@@ -28,6 +36,11 @@ pub fn run() {
             connection_commands::ping_connection,
             connection_commands::reconnect_connection,
             connection_commands::list_connections,
+            schema_commands::list_databases,
+            schema_commands::list_objects,
+            schema_commands::object_definition,
+            data_commands::browse_table,
+            data_commands::apply_row_changes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

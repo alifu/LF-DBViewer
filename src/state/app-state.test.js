@@ -7,11 +7,19 @@ import {
   activateConnection,
   activeConnection,
   addConnection,
+  activateTab,
   appendLog,
+  closeTab,
   initialState,
+  openTab,
   removeConnection,
   replaceConnectionInfo,
+  schemaOf,
   setConnectionStatus,
+  setDatabases,
+  setObjects,
+  tabsOf,
+  toggleExpanded,
 } from "./app-state.js";
 
 const withTwo = () => addConnection(addConnection(initialState, { id: "a", name: "A" }), { id: "b", name: "B" });
@@ -69,4 +77,73 @@ test("the log keeps only the most recent entries", () => {
 
   assert.equal(state.log.length, MAX_LOG_ENTRIES);
   assert.equal(state.log[0].message, "5");
+});
+
+const table = (name, connectionId = "a") => ({ connectionId, database: "shop", name, kind: "table" });
+
+test("schema data is kept per connection and expansion toggles", () => {
+  let state = setDatabases(withTwo(), "a", [{ name: "shop" }]);
+  state = setObjects(state, "a", "shop", { tables: [{ name: "orders" }] });
+  state = toggleExpanded(state, "a", "shop");
+
+  assert.equal(schemaOf(state, "a").objects.shop.tables[0].name, "orders");
+  assert.equal(schemaOf(state, "a").expanded.shop, true);
+  assert.deepEqual(schemaOf(state, "b").databases, []);
+  assert.equal(schemaOf(toggleExpanded(state, "a", "shop"), "a").expanded.shop, undefined);
+});
+
+test("reloading databases forgets loaded objects but keeps expansion", () => {
+  let state = setObjects(setDatabases(withTwo(), "a", [{ name: "shop" }]), "a", "shop", { tables: [] });
+  state = toggleExpanded(state, "a", "shop");
+
+  state = setDatabases(state, "a", [{ name: "shop" }, { name: "crm" }]);
+
+  assert.deepEqual(schemaOf(state, "a").objects, {});
+  assert.equal(schemaOf(state, "a").expanded.shop, true);
+});
+
+test("opening the same object twice selects the existing tab", () => {
+  let state = openTab(openTab(withTwo(), table("orders")), table("items"));
+  state = openTab(state, table("orders"));
+
+  assert.equal(tabsOf(state, "a").length, 2);
+  assert.equal(state.activeTabIds.a, tabsOf(state, "a")[0].id);
+});
+
+test("a table and a view with the same name are different tabs", () => {
+  const state = openTab(openTab(withTwo(), table("orders")), { ...table("orders"), kind: "view" });
+
+  assert.equal(state.tabs.length, 2);
+});
+
+test("closing the selected tab selects its neighbour on the same connection", () => {
+  let state = openTab(openTab(openTab(withTwo(), table("orders")), table("items")), table("other", "b"));
+  const [orders, items] = tabsOf(state, "a");
+
+  state = closeTab(state, items.id);
+
+  assert.equal(state.activeTabIds.a, orders.id);
+  assert.equal(tabsOf(state, "b").length, 1);
+  assert.equal(closeTab(state, orders.id).activeTabIds.a, null);
+});
+
+test("selecting a tab only affects its own connection", () => {
+  let state = openTab(openTab(withTwo(), table("orders")), table("items"));
+  const [orders] = tabsOf(state, "a");
+
+  state = activateTab(state, orders.id);
+
+  assert.equal(state.activeTabIds.a, orders.id);
+  assert.equal(activateTab(state, "missing"), state);
+});
+
+test("closing a connection drops its tabs and schema", () => {
+  let state = openTab(openTab(withTwo(), table("orders")), table("other", "b"));
+  state = setDatabases(state, "a", [{ name: "shop" }]);
+
+  state = removeConnection(state, "a");
+
+  assert.deepEqual(state.tabs.map((tab) => tab.name), ["other"]);
+  assert.equal(state.schemas.a, undefined);
+  assert.equal(state.activeTabIds.a, undefined);
 });

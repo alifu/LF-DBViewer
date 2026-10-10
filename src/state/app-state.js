@@ -9,8 +9,16 @@ export const initialState = Object.freeze({
   profiles: [],
   connections: [],
   activeConnectionId: null,
+  /** Per connection id: `{ databases, objects: { [database]: SchemaObjects }, expanded: { [key]: true } }`. */
+  schemas: {},
+  /** Open object tabs across all connections: `{ id, connectionId, database, name, kind }`. */
+  tabs: [],
+  /** Per connection id: the id of its selected tab. */
+  activeTabIds: {},
   log: [],
 });
+
+const EMPTY_SCHEMA = Object.freeze({ databases: [], objects: {}, expanded: {} });
 
 const UNKNOWN_STATUS = Object.freeze({ connected: true, latencyMs: null, error: null });
 
@@ -44,10 +52,15 @@ export function removeConnection(state, id) {
   const connections = state.connections.filter((connection) => connection.id !== id);
   const neighbour = connections[Math.min(index, connections.length - 1)] ?? null;
   const activeConnectionId = state.activeConnectionId === id ? (neighbour?.id ?? null) : state.activeConnectionId;
+  const { [id]: _schema, ...schemas } = state.schemas;
+  const { [id]: _activeTab, ...activeTabIds } = state.activeTabIds;
   return {
     ...state,
     connections,
     activeConnectionId,
+    schemas,
+    activeTabIds,
+    tabs: state.tabs.filter((tab) => tab.connectionId !== id),
     view: connections.length === 0 ? VIEW.dashboard : state.view,
   };
 }
@@ -78,4 +91,65 @@ export function appendLog(state, entry) {
 
 export function clearLog(state) {
   return { ...state, log: [] };
+}
+
+export function schemaOf(state, connectionId) {
+  return state.schemas[connectionId] ?? EMPTY_SCHEMA;
+}
+
+function withSchema(state, connectionId, change) {
+  return { ...state, schemas: { ...state.schemas, [connectionId]: change(schemaOf(state, connectionId)) } };
+}
+
+/** Replaces the database list and forgets loaded objects, keeping which nodes are expanded. */
+export function setDatabases(state, connectionId, databases) {
+  return withSchema(state, connectionId, (schema) => ({ ...schema, databases, objects: {} }));
+}
+
+export function setObjects(state, connectionId, database, objects) {
+  return withSchema(state, connectionId, (schema) => ({ ...schema, objects: { ...schema.objects, [database]: objects } }));
+}
+
+export function toggleExpanded(state, connectionId, key) {
+  return withSchema(state, connectionId, (schema) => {
+    const { [key]: wasExpanded, ...others } = schema.expanded;
+    return { ...schema, expanded: wasExpanded ? others : { ...others, [key]: true } };
+  });
+}
+
+export function tabId({ connectionId, database, name, kind }) {
+  return [connectionId, kind, database, name].join("\u0000");
+}
+
+/** Opens the tab, or just selects it when it is already open. */
+export function openTab(state, target) {
+  const id = tabId(target);
+  const tabs = state.tabs.some((tab) => tab.id === id) ? state.tabs : [...state.tabs, { ...target, id }];
+  return { ...state, tabs, activeTabIds: { ...state.activeTabIds, [target.connectionId]: id } };
+}
+
+export function activateTab(state, id) {
+  const tab = state.tabs.find((candidate) => candidate.id === id);
+  if (!tab) return state;
+  return { ...state, activeTabIds: { ...state.activeTabIds, [tab.connectionId]: id } };
+}
+
+/** Closing the selected tab selects the neighbour on the same connection. */
+export function closeTab(state, id) {
+  const tab = state.tabs.find((candidate) => candidate.id === id);
+  if (!tab) return state;
+  const siblings = state.tabs.filter((candidate) => candidate.connectionId === tab.connectionId);
+  const index = siblings.findIndex((candidate) => candidate.id === id);
+  const remaining = siblings.filter((candidate) => candidate.id !== id);
+  const neighbour = remaining[Math.min(index, remaining.length - 1)] ?? null;
+  const wasActive = state.activeTabIds[tab.connectionId] === id;
+  return {
+    ...state,
+    tabs: state.tabs.filter((candidate) => candidate.id !== id),
+    activeTabIds: wasActive ? { ...state.activeTabIds, [tab.connectionId]: neighbour?.id ?? null } : state.activeTabIds,
+  };
+}
+
+export function tabsOf(state, connectionId) {
+  return state.tabs.filter((tab) => tab.connectionId === connectionId);
 }

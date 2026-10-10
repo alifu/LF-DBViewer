@@ -129,4 +129,19 @@ mod tests {
         );
         assert_eq!(saved_or(&store, "", kind, None).unwrap(), None);
     }
+
+    #[test]
+    fn connect_request_deserializes_from_what_the_interface_sends() {
+        let json = r#"{"profile":{"id":"","name":"Local","engine":"mysql","host":"127.0.0.1","port":3306,
+                       "user":"root","database":null,"socket":null,"sslMode":"disabled","sslCa":null,
+                       "ssh":{"host":"bastion","port":22,"user":"me","auth":{"method":"keyFile","path":"~/.ssh/id"}}},
+                       "password":"","sshSecret":null,"trustSshHost":true}"#;
+
+        let request: ConnectRequest = serde_json::from_str(json).unwrap();
+
+        assert_eq!(request.password.as_deref(), Some(""));
+        assert_eq!(request.ssh_secret, None);
+        assert!(request.trust_ssh_host);
+        assert!(request.profile.ssh.is_some());
+    }
 }

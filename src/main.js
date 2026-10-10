@@ -1,7 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import { createConnectionActions } from "./app/connection-actions.js";
+import { createSchemaActions } from "./app/schema-actions.js";
 import { createDashboard } from "./features/dashboard/dashboard.js";
 import { createLogPanel } from "./features/log/log-panel.js";
+import { createDefinitionView } from "./features/schema/definition-view.js";
+import { databaseKey } from "./features/schema/tree.js";
+import { createTableView } from "./features/table/table-view.js";
 import { createWorkspace } from "./features/workspace/workspace.js";
 import { createApi } from "./lib/api.js";
 import { confirmDialog } from "./lib/dom.js";
@@ -9,94 +14,59 @@ import { createStore } from "./lib/store.js";
 import * as transitions from "./state/app-state.js";
 
 const PING_INTERVAL_MS = 15_000;
-const SSH_UNKNOWN_HOST = "ssh_unknown_host";
+const DATA_KINDS = ["table", "view"];
 
 const store = createStore(transitions.initialState);
 const log = (entry) => store.update((state) => transitions.appendLog(state, { ...entry, time: new Date() }));
 const api = createApi({ invoke, onLog: log });
+const schema = createSchemaActions({ api, store });
 
-async function refreshProfiles() {
-  const profiles = await api("list_profiles", {}, { quiet: true });
-  store.update((state) => transitions.setProfiles(state, profiles));
+/** A new connection shows its databases, with the profile's default database already open. */
+async function showSchema(info) {
+  await schema.loadDatabases(info.id).catch(() => {});
+  const isClosed = !transitions.schemaOf(store.getState(), info.id).expanded[databaseKey(info.database)];
+  if (info.database && isClosed) await schema.toggleDatabase(info.id, info.database);
 }
 
-/** Runs a connect/test call; an unknown SSH host is retried once the user accepts its fingerprint. */
-async function withHostKeyPrompt(command, request, label) {
-  try {
-    return await api(command, { request }, { label });
-  } catch (error) {
-    if (error.code !== SSH_UNKNOWN_HOST) throw error;
-    const trusted = await confirmDialog({
-      title: "Unknown SSH host",
-      body: `${error.message}. Trust this host and add it to ~/.ssh/known_hosts?`,
-      confirmLabel: "Trust and connect",
-    });
-    if (!trusted) throw error;
-    return api(command, { request: { ...request, trustSshHost: true } }, { label });
-  }
-}
+const connections = createConnectionActions({ api, store, log, onConnected: showSchema });
 
-function toConnectRequest({ profile, password, sshSecret }) {
-  return { profile, password, sshSecret };
+async function confirmLosingEdits(tabIds, what) {
+  if (!workspace.hasUnsavedChanges(tabIds)) return true;
+  return confirmDialog({
+    title: "Discard unsaved changes?",
+    body: `${what} has row changes that were not applied.`,
+    confirmLabel: "Discard",
+    danger: true,
+  });
 }
-
-async function checkConnection(id) {
-  const status = await api("ping_connection", { connectionId: id }, { quiet: true });
-  const previous = store.getState().connections.find((connection) => connection.id === id);
-  if (previous && previous.status.connected !== status.connected) {
-    log({ level: status.connected ? "info" : "error", message: `${previous.name}: ${status.connected ? "connection restored" : status.error}` });
-  }
-  store.update((state) => transitions.setConnectionStatus(state, id, status));
-  return status;
-}
-
-const dashboardActions = {
-  test: (request) => withHostKeyPrompt("test_connection", toConnectRequest(request), `Test ${request.profile.name}`),
-  async save(request) {
-    const saved = await api("save_profile", { request }, { label: `Save ${request.profile.name}` });
-    await refreshProfiles();
-    return saved;
-  },
-  async connect(request) {
-    const info = await withHostKeyPrompt("open_connection", toConnectRequest(request), `Connect to ${request.profile.name}`);
-    store.update((state) => transitions.addConnection(state, info));
-    await checkConnection(info.id);
-  },
-  async remove(form) {
-    const confirmed = await confirmDialog({
-      title: "Delete saved connection",
-      body: `Delete "${form.name}" and its saved passwords? The database itself is not touched.`,
-      confirmLabel: "Delete",
-      danger: true,
-    });
-    if (!confirmed) return false;
-    await api("delete_profile", { id: form.id }, { label: `Delete ${form.name}` });
-    await refreshProfiles();
-    return true;
-  },
-  backToWorkspace: () => store.update((state) => transitions.activateConnection(state, state.activeConnectionId)),
-};
 
 const workspaceActions = {
-  activate: (id) => store.update((state) => transitions.activateConnection(state, id)),
-  newConnection: () => store.update(transitions.showDashboard),
+  ...schema,
+  activate: connections.activate,
+  newConnection: connections.newConnection,
   async close(id) {
-    await api("close_connection", { connectionId: id }, { label: "Disconnect" }).catch(() => {});
-    store.update((state) => transitions.removeConnection(state, id));
+    const tabIds = transitions.tabsOf(store.getState(), id).map((tab) => tab.id);
+    if (await confirmLosingEdits(tabIds, "This connection")) await connections.disconnect(id);
   },
-  async reload(id) {
-    const status = await checkConnection(id).catch(() => ({ connected: false }));
-    if (status.connected) return;
-    const info = await api("reconnect_connection", { connectionId: id }, { label: "Reconnect" }).catch(() => null);
-    if (info === null) return;
-    store.update((state) => transitions.replaceConnectionInfo(state, info));
-    await checkConnection(id);
+  async closeTab(id) {
+    if (await confirmLosingEdits([id], "This tab")) schema.closeTab(id);
+  },
+  /** Reload button: make sure the connection is up, then refresh the tree and the open tab. */
+  async reload(id, activeView) {
+    if (!(await connections.ensureConnected(id))) return;
+    await schema.loadDatabases(id).catch(() => {});
+    await activeView?.reload();
   },
 };
 
+function createTabView(tab) {
+  if (DATA_KINDS.includes(tab.kind)) return createTableView({ tab, data: schema.tableData(tab) });
+  return createDefinitionView({ load: () => schema.definition(tab) });
+}
+
 const logPanel = createLogPanel({ onClear: () => store.update(transitions.clearLog) });
-const dashboard = createDashboard({ actions: dashboardActions });
-const workspace = createWorkspace({ actions: workspaceActions, logPanel });
+const dashboard = createDashboard({ actions: connections });
+const workspace = createWorkspace({ actions: workspaceActions, logPanel, createTabView });
 const root = document.querySelector("#app");
 
 function render(state, previous) {
@@ -104,7 +74,7 @@ function render(state, previous) {
     root.replaceChildren(state.view === transitions.VIEW.dashboard ? dashboard.element : workspace.element);
   }
   dashboard.render(state);
-  workspace.render(state);
+  workspace.render(state, previous);
   if (state.log !== previous?.log) logPanel.render(state.log);
 }
 
@@ -113,10 +83,10 @@ render(store.getState(), null);
 
 setInterval(() => {
   // Failures are already in the log; one dead connection must not stop the others being checked.
-  for (const connection of store.getState().connections) checkConnection(connection.id).catch(() => {});
+  for (const connection of store.getState().connections) connections.checkConnection(connection.id).catch(() => {});
 }, PING_INTERVAL_MS);
 
-refreshProfiles().catch(() => {});
+connections.refreshProfiles().catch(() => {});
 api("detect_client_defaults", {}, { quiet: true })
   .then((defaults) => dashboard.setClientDefaults(defaults))
   .catch(() => {});

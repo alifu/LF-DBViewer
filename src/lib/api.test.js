@@ -47,3 +47,15 @@ test("non-object failures become an unknown AppError", () => {
   assert.equal(error.code, "unknown");
   assert.equal(error.message, "boom");
 });
+
+test("a label function describes the result, and failures fall back to the command name", async () => {
+  const ok = setup(async () => ({ sql: "SELECT 1" }));
+  await ok.call("browse_table", {}, { label: (page) => page.sql });
+  assert.equal(ok.logged[0].message, "SELECT 1");
+
+  const failing = setup(async () => {
+    throw { code: "database", message: "gone" };
+  });
+  await assert.rejects(failing.call("browse_table", {}, { label: (page) => page.sql }));
+  assert.equal(failing.logged[0].message, "browse_table: gone");
+});
