@@ -50,6 +50,7 @@ const blankColumn = (name) => ({
   collation: null,
   comment: "",
   generated: null,
+  invisible: false,
 });
 
 export function emptyTable(name) {
@@ -59,6 +60,7 @@ export function emptyTable(name) {
     columns: [{ ...blankColumn("id"), columnType: "bigint unsigned", nullable: false, default: { kind: "none" }, autoIncrement: true }],
     indexes: [{ originalName: null, name: "PRIMARY", kind: "primary", columns: [{ name: "id", length: null, descending: false }] }],
     foreignKeys: [],
+    checks: [],
     options: { engine: "InnoDB", rowFormat: null, autoIncrement: null, collation: null, comment: "" },
   };
 }
@@ -176,6 +178,19 @@ export function updateForeignKey(table, position, patch) {
 
 export function removeForeignKey(table, position) {
   return { ...table, foreignKeys: table.foreignKeys.filter((_key, at) => at !== position) };
+}
+
+export function addCheck(table) {
+  const taken = (table.checks ?? []).map((check) => check.name);
+  return { ...table, checks: [...(table.checks ?? []), { originalName: null, name: uniqueName(taken, "chk"), expression: "" }] };
+}
+
+export function updateCheck(table, position, patch) {
+  return { ...table, checks: table.checks.map((check, at) => (at === position ? { ...check, ...patch } : check)) };
+}
+
+export function removeCheck(table, position) {
+  return { ...table, checks: table.checks.filter((_check, at) => at !== position) };
 }
 
 export function updateOptions(table, patch) {

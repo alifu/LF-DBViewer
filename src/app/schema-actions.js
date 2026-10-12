@@ -68,6 +68,8 @@ export function createSchemaActions({ api, store }) {
     /** Backend calls bound to one table tab; each logs the SQL that ran. */
     tableData: ({ connectionId, database, name }) => ({
       openStructure: () => store.update((state) => transitions.openTab(state, { connectionId, database, name, kind: "structure" })),
+      count: (filters) => api("count_table_rows", { connectionId, database, table: name, filters }, { label: `Count rows of ${name}` }),
+      readCell: ({ column, key }) => api("read_table_cell", { connectionId, database, table: name, column, key }, { label: `Read ${name}.${column}` }),
       browse: (page) => api("browse_table", { connectionId, database, table: name, page }, { label: (result) => result.sql }),
       apply: (changes) =>
         api("apply_row_changes", { connectionId, database, table: name, changes }, { label: (result) => result.statements.join(";\n") }),

@@ -696,6 +696,7 @@ mod structure_tests {
             collation: None,
             comment: String::new(),
             generated: None,
+            invisible: false,
         }
     }
 
@@ -728,6 +729,7 @@ mod structure_tests {
             ],
             indexes: vec![key("PRIMARY", IndexKind::Primary, &["id"])],
             foreign_keys: vec![],
+            checks: vec![],
             options: TableOptions {
                 engine: Some("InnoDB".into()),
                 ..TableOptions::default()
@@ -797,6 +799,7 @@ mod structure_tests {
                 on_update: ReferentialAction::Cascade,
                 on_delete: ReferentialAction::Restrict,
             }],
+            checks: vec![],
             options: TableOptions {
                 engine: Some("InnoDB".into()),
                 comment: "Orders".into(),
@@ -1036,6 +1039,141 @@ mod structure_tests {
         );
         assert_eq!(after.options.collation.as_deref(), Some("utf8mb4_bin"));
         assert_eq!(after.columns[2].collation.as_deref(), Some("utf8mb4_bin"));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a live MySQL/MariaDB server (LFDB_TEST_* variables)"]
+    async fn checks_and_invisible_columns_are_written_read_back_changed_and_a_table_can_be_copied()
+    {
+        use crate::ddl::model::CheckConstraint;
+        let (manager, id) = connect().await;
+        let mut conn = manager.get(&id).await.unwrap().conn().await.unwrap();
+        let database = scratch_database(&mut conn).await;
+        let engine = engine_of(&mut conn).await;
+        let mut table = customers();
+        table.columns.push(ColumnDefinition {
+            invisible: true,
+            nullable: true,
+            default: ColumnDefault::Null,
+            ..column("secret", "int")
+        });
+        table.checks = vec![CheckConstraint {
+            original_name: None,
+            name: "name_not_empty".into(),
+            expression: "char_length(`name`) > 0".into(),
+        }];
+        apply(
+            &mut conn,
+            &StructureChange::CreateTable {
+                database: database.clone(),
+                table: Box::new(table),
+            },
+        )
+        .await;
+        conn.query_drop(format!(
+            "INSERT INTO `{database}`.`customers` (name, secret) VALUES ('a', 7), ('b', 8)"
+        ))
+        .await
+        .unwrap();
+
+        let loaded = read(&mut conn, engine, &database, "customers").await;
+        let refused = conn
+            .query_drop(format!(
+                "INSERT INTO `{database}`.`customers` (name) VALUES ('')"
+            ))
+            .await;
+        let mut edited = loaded.clone();
+        edited.checks.clear();
+        edited.checks.push(CheckConstraint {
+            original_name: None,
+            name: "name_short".into(),
+            expression: "char_length(`name`) < 20".into(),
+        });
+        apply(
+            &mut conn,
+            &StructureChange::AlterTable {
+                database: database.clone(),
+                original: Box::new(loaded.clone()),
+                edited: Box::new(edited),
+                convert_columns: false,
+            },
+        )
+        .await;
+        let changed = read(&mut conn, engine, &database, "customers").await;
+        let allowed_now = conn
+            .query_drop(format!(
+                "INSERT INTO `{database}`.`customers` (name) VALUES ('')"
+            ))
+            .await;
+        let columns: Vec<String> = loaded
+            .columns
+            .iter()
+            .filter(|column| column.generated.is_none())
+            .map(|column| column.name.clone())
+            .collect();
+        apply(
+            &mut conn,
+            &StructureChange::CopyTable {
+                database: database.clone(),
+                source: "customers".into(),
+                target: "customers_copy".into(),
+                with_data: true,
+                columns,
+            },
+        )
+        .await;
+        let copied: Option<u64> = conn
+            .query_first(format!(
+                "SELECT COUNT(*) FROM `{database}`.`customers_copy`"
+            ))
+            .await
+            .unwrap();
+        let copied_secret: Option<i64> = conn
+            .query_first(format!(
+                "SELECT secret FROM `{database}`.`customers_copy` WHERE name = 'b'"
+            ))
+            .await
+            .unwrap();
+        conn.query_drop(format!("DROP DATABASE `{database}`"))
+            .await
+            .unwrap();
+
+        assert!(
+            loaded
+                .columns
+                .iter()
+                .find(|column| column.name == "secret")
+                .unwrap()
+                .invisible,
+            "the invisible flag is read back"
+        );
+        assert!(
+            !loaded
+                .columns
+                .iter()
+                .find(|column| column.name == "name")
+                .unwrap()
+                .invisible
+        );
+        assert_eq!(
+            loaded
+                .checks
+                .iter()
+                .map(|check| check.name.as_str())
+                .collect::<Vec<_>>(),
+            ["name_not_empty"]
+        );
+        assert!(refused.is_err(), "the check rejects an empty name");
+        assert_eq!(
+            changed
+                .checks
+                .iter()
+                .map(|check| check.name.as_str())
+                .collect::<Vec<_>>(),
+            ["name_short"]
+        );
+        assert!(allowed_now.is_ok(), "the old check is gone");
+        assert_eq!((copied, copied_secret), (Some(3), Some(8)));
     }
 
     #[tokio::test]
@@ -2399,5 +2537,94 @@ mod ssh_tests {
             result.err()
         );
         let _ = std::fs::remove_file(&known);
+    }
+}
+
+// ---- single cells and exact counts ----
+
+mod cell_tests {
+    use mysql_async::prelude::Queryable;
+
+    use super::connect;
+    use crate::query::browse::{
+        Filter, FilterOperator, MAX_CELL_BINARY_BYTES, count_rows, read_cell,
+    };
+    use crate::query::edit::ColumnValue;
+
+    fn key(column: &str, value: &str) -> ColumnValue {
+        ColumnValue {
+            column: column.into(),
+            value: Some(value.into()),
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a live MySQL/MariaDB server (LFDB_TEST_* variables)"]
+    async fn a_whole_cell_is_read_even_when_the_grid_only_shows_a_preview_and_rows_are_counted() {
+        let (manager, id) = connect().await;
+        let mut conn = manager.get(&id).await.unwrap().conn().await.unwrap();
+        let database = format!(
+            "lfdb_cell_{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..12]
+        );
+        conn.query_drop(format!("CREATE DATABASE `{database}`"))
+            .await
+            .unwrap();
+        conn.query_drop(format!("CREATE TABLE `{database}`.`t` (id INT PRIMARY KEY, body LONGTEXT, raw LONGBLOB, tag VARCHAR(10))")).await.unwrap();
+        conn.query_drop(format!("INSERT INTO `{database}`.`t` VALUES (1, REPEAT('é', 5000), REPEAT(0xAB, 100000), 'a'), (2, 'short', 0x00ff, 'b'), (3, NULL, NULL, 'a')")).await.unwrap();
+
+        let long = read_cell(&mut conn, &database, "t", "body", &[key("id", "1")])
+            .await
+            .unwrap();
+        let small_binary = read_cell(&mut conn, &database, "t", "raw", &[key("id", "2")])
+            .await
+            .unwrap();
+        let big_binary = read_cell(&mut conn, &database, "t", "raw", &[key("id", "1")])
+            .await
+            .unwrap();
+        let missing = read_cell(&mut conn, &database, "t", "body", &[key("id", "99")]).await;
+        let ambiguous = read_cell(&mut conn, &database, "t", "body", &[key("tag", "a")]).await;
+        let bad_column = read_cell(&mut conn, &database, "t", "nope", &[key("id", "1")]).await;
+        let all = count_rows(&mut conn, &database, "t", &[]).await.unwrap();
+        let filtered = count_rows(
+            &mut conn,
+            &database,
+            "t",
+            &[Filter {
+                column: "tag".into(),
+                operator: FilterOperator::Equals,
+                value: Some("a".into()),
+            }],
+        )
+        .await
+        .unwrap();
+        conn.query_drop(format!("DROP DATABASE `{database}`"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (
+                long.binary,
+                long.text.chars().count(),
+                long.size,
+                long.truncated
+            ),
+            (false, 5000, 10_000, false)
+        );
+        assert_eq!(
+            (
+                small_binary.binary,
+                small_binary.text.as_str(),
+                small_binary.size,
+                small_binary.truncated
+            ),
+            (true, "00ff", 2, false)
+        );
+        assert_eq!(
+            (big_binary.text.len(), big_binary.size, big_binary.truncated),
+            (MAX_CELL_BINARY_BYTES * 2, 100_000, true)
+        );
+        assert!(missing.is_err() && ambiguous.is_err() && bad_column.is_err());
+        assert_eq!((all, filtered), (3, 2));
     }
 }

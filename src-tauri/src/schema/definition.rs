@@ -9,8 +9,8 @@ use serde::Serialize;
 use super::{optional, required, texts};
 use crate::connection::model::Engine;
 use crate::ddl::model::{
-    ColumnDefault, ColumnDefinition, ForeignKeyDefinition, Generated, IndexColumn, IndexDefinition,
-    IndexKind, ReferentialAction, TableDefinition, TableOptions,
+    CheckConstraint, ColumnDefault, ColumnDefinition, ForeignKeyDefinition, Generated, IndexColumn,
+    IndexDefinition, IndexKind, ReferentialAction, TableDefinition, TableOptions,
 };
 use crate::error::{AppError, AppResult};
 
@@ -167,6 +167,7 @@ async fn read_columns(
                 collation: optional(row.get(5)),
                 comment: required(row.get(6)),
                 generated,
+                invisible: extra.to_ascii_uppercase().contains("INVISIBLE"),
                 name,
                 column_type,
                 nullable,
@@ -268,6 +269,30 @@ async fn read_foreign_keys(
     Ok(keys)
 }
 
+async fn read_checks(
+    conn: &mut Conn,
+    database: &str,
+    table: &str,
+) -> AppResult<Vec<CheckConstraint>> {
+    let rows: Vec<Row> = conn
+        .exec(
+            "SELECT c.CONSTRAINT_NAME, c.CHECK_CLAUSE FROM information_schema.CHECK_CONSTRAINTS c \
+             JOIN information_schema.TABLE_CONSTRAINTS t ON t.CONSTRAINT_SCHEMA = c.CONSTRAINT_SCHEMA AND t.CONSTRAINT_NAME = c.CONSTRAINT_NAME \
+             WHERE t.TABLE_SCHEMA = ? AND t.TABLE_NAME = ? AND t.CONSTRAINT_TYPE = 'CHECK' ORDER BY c.CONSTRAINT_NAME",
+            (database, table),
+        )
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(texts)
+        .map(|row| CheckConstraint {
+            original_name: optional(row.first()),
+            name: required(row.first()),
+            expression: required(row.get(1)),
+        })
+        .collect())
+}
+
 pub async fn read_table_definition(
     conn: &mut Conn,
     engine: Engine,
@@ -281,6 +306,7 @@ pub async fn read_table_definition(
         columns: read_columns(conn, engine, database, table).await?,
         indexes: read_indexes(conn, database, table).await?,
         foreign_keys: read_foreign_keys(conn, database, table).await?,
+        checks: read_checks(conn, database, table).await?,
         options,
     })
 }

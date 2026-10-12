@@ -1,7 +1,8 @@
 //! SQL text for one column, index or foreign key.
 
 use super::model::{
-    ColumnDefault, ColumnDefinition, ForeignKeyDefinition, IndexColumn, IndexDefinition, IndexKind,
+    CheckConstraint, ColumnDefault, ColumnDefinition, ForeignKeyDefinition, IndexColumn,
+    IndexDefinition, IndexKind,
 };
 use crate::connection::model::Engine;
 use crate::error::{AppError, AppResult};
@@ -122,6 +123,9 @@ pub fn column_sql(column: &ColumnDefinition, engine: Engine) -> AppResult<String
             parts.push(format!("ON UPDATE {}", on_update.trim()));
         }
     }
+    if column.invisible {
+        parts.push("INVISIBLE".into());
+    }
     if !column.comment.is_empty() {
         parts.push(format!("COMMENT {}", quote_string(&column.comment)));
     }
@@ -166,6 +170,20 @@ fn check_identifier_if_given(name: &str, what: &str) -> AppResult<()> {
     } else {
         check_identifier(name, what)
     }
+}
+
+pub fn check_sql(check: &CheckConstraint) -> AppResult<String> {
+    if check.expression.trim().is_empty() {
+        return Err(AppError::Validation("A check needs a condition".into()));
+    }
+    check_balanced(&check.expression, "A check condition")?;
+    check_identifier_if_given(&check.name, "Check")?;
+    let name = if check.name.is_empty() {
+        String::new()
+    } else {
+        format!("CONSTRAINT {} ", quote_identifier(&check.name))
+    };
+    Ok(format!("{name}CHECK ({})", check.expression.trim()))
 }
 
 pub fn foreign_key_sql(table_database: &str, key: &ForeignKeyDefinition) -> AppResult<String> {

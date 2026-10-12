@@ -54,7 +54,7 @@ export function changeCount(pending) {
  * the table has none. Binary and oversized cells cannot be compared, so a primary key
  * containing one is an error, while a keyless row simply leaves them out.
  */
-function rowKey(row, columns, primaryKey) {
+export function rowKey(row, columns, primaryKey) {
   const keyed = primaryKey.length > 0;
   const names = keyed ? primaryKey : columns.map((column) => column.name);
   const parts = names.map((name) => ({ column: name, value: row[columns.findIndex((column) => column.name === name)] }));

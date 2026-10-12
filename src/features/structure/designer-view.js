@@ -1,9 +1,9 @@
 import { h } from "../../lib/dom.js";
 import { charsetOfCollation } from "./collation-options.js";
 import {
-  COMMON_TYPES, INDEX_KINDS, REFERENTIAL_ACTIONS, ROW_FORMATS, addColumn, addForeignKey, addIndex, emptyTable, formatIndexColumns,
-  formatNameList, hasChanges, isTextType, moveColumn, parseIndexColumns, parseNameList, primaryKeyColumns, removeColumn, removeForeignKey,
-  removeIndex, renameColumn, setDefault, setPrimaryKey, uniqueName, updateColumn, updateForeignKey, updateIndex, updateOptions,
+  COMMON_TYPES, INDEX_KINDS, REFERENTIAL_ACTIONS, ROW_FORMATS, addCheck, addColumn, addForeignKey, addIndex, emptyTable, formatIndexColumns,
+  formatNameList, hasChanges, isTextType, moveColumn, parseIndexColumns, parseNameList, primaryKeyColumns, removeCheck, removeColumn, removeForeignKey,
+  removeIndex, renameColumn, setDefault, setPrimaryKey, uniqueName, updateCheck, updateColumn, updateForeignKey, updateIndex, updateOptions,
 } from "./designer-state.js";
 
 const DEFAULT_KINDS = Object.freeze([
@@ -40,6 +40,7 @@ export function createDesignerView({ tab, data }) {
   const columnsBox = h("div", { class: "designer-box" });
   const indexesBox = h("div", { class: "designer-box" });
   const keysBox = h("div", { class: "designer-box" });
+  const checksBox = h("div", { class: "designer-box" });
   const optionsBox = h("div", { class: "designer-box" });
   const applyButton = h("button", { type: "button", class: "primary", onClick: () => void submit() }, "Review & apply");
   const revertButton = h("button", { type: "button", onClick: () => void load() }, "Revert");
@@ -48,7 +49,7 @@ export function createDesignerView({ tab, data }) {
     { class: "designer" },
     h("datalist", { id: TYPES_LIST_ID }, ...COMMON_TYPES.map((type) => h("option", { value: type }))),
     h("div", { class: "designer-header" }, h("label", { class: "field inline" }, h("span", {}, "Table"), nameInput), h("span", { class: "spacer" }), message, revertButton, applyButton),
-    h("div", { class: "designer-body" }, section("Columns", columnsBox), section("Indexes", indexesBox), section("Foreign keys", keysBox), section("Options", optionsBox)),
+    h("div", { class: "designer-body" }, section("Columns", columnsBox), section("Indexes", indexesBox), section("Foreign keys", keysBox), section("Checks", checksBox), section("Options", optionsBox)),
   );
 
   function section(title, box) {
@@ -157,6 +158,7 @@ export function createDesignerView({ tab, data }) {
             onInput: (event) => (table = updateColumn(table, position, { generated: event.target.value === "" ? null : { expression: event.target.value, stored: table.columns[position].generated?.stored ?? false } })),
           })),
           h("label", { class: "check" }, check(generated?.stored ?? false, (value) => (table = updateColumn(table, position, { generated: { expression: table.columns[position].generated?.expression ?? "", stored: value } })), "Stored"), "Stored"),
+          h("label", { class: "check" }, check(column.invisible, (value) => (table = updateColumn(table, position, { invisible: value })), "Invisible"), "Invisible (left out of SELECT * and plain INSERTs)"),
           h("label", { class: "field wide" }, h("span", {}, "Comment"), text(column.comment, { onInput: (event) => (table = updateColumn(table, position, { comment: event.target.value })) })),
         ),
       ),
@@ -218,6 +220,23 @@ export function createDesignerView({ tab, data }) {
     );
   }
 
+  function checkRow(constraint, position) {
+    return h(
+      "tr",
+      { class: constraint.originalName === null ? "new-row" : "" },
+      h("td", {}, text(constraint.name, { "aria-label": "Check name", placeholder: "(automatic)", onInput: (event) => (table = updateCheck(table, position, { name: event.target.value })) })),
+      h("td", { class: "wide" }, text(constraint.expression, { "aria-label": "Check condition", placeholder: "price >= 0", onInput: (event) => (table = updateCheck(table, position, { expression: event.target.value })) })),
+      h("td", { class: "cell-actions" }, iconButton("✕", "Remove check", () => ((table = removeCheck(table, position)), renderChecks()))),
+    );
+  }
+
+  function renderChecks() {
+    checksBox.replaceChildren(
+      h("table", { class: "designer-table" }, h("thead", {}, h("tr", {}, ...["Name", "Condition", ""].map((label) => h("th", {}, label)))), h("tbody", {}, ...(table.checks ?? []).map(checkRow))),
+      h("button", { type: "button", onClick: () => ((table = addCheck(table)), renderChecks()) }, "Add check"),
+    );
+  }
+
   // ---- options --------------------------------------------------------------------
 
   function collationSelect() {
@@ -253,6 +272,7 @@ export function createDesignerView({ tab, data }) {
     renderColumns();
     renderIndexes();
     renderKeys();
+    renderChecks();
     renderOptions();
   }
 

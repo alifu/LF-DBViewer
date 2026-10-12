@@ -2,10 +2,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::column::{check_identifier, check_plain_word, column_sql, foreign_key_sql, index_sql};
+use super::column::{
+    check_identifier, check_plain_word, check_sql, column_sql, foreign_key_sql, index_sql,
+};
 use super::model::{
-    ColumnDefinition, ForeignKeyDefinition, IndexDefinition, IndexKind, TableDefinition,
-    TableOptions,
+    CheckConstraint, ColumnDefinition, ForeignKeyDefinition, IndexDefinition, IndexKind,
+    TableDefinition, TableOptions,
 };
 use crate::connection::model::Engine;
 use crate::error::{AppError, AppResult};
@@ -73,6 +75,13 @@ pub fn validate(table: &TableDefinition) -> AppResult<()> {
             )));
         }
     }
+    let mut check_names = HashSet::new();
+    for check in &table.checks {
+        check_sql(check)?;
+        if !check.name.is_empty() && !check_names.insert(check.name.to_lowercase()) {
+            return Err(invalid(format!("Check name {} is used twice", check.name)));
+        }
+    }
     check_options(&table.options)
 }
 
@@ -130,6 +139,9 @@ pub fn create_table_statement(
     }
     for key in &table.foreign_keys {
         lines.push(foreign_key_sql(database, key)?);
+    }
+    for check in &table.checks {
+        lines.push(check_sql(check)?);
     }
     let body = lines
         .iter()
@@ -369,6 +381,48 @@ fn foreign_key_clauses(
     Ok((drops, adds))
 }
 
+/// Checks that disappeared or changed are dropped (MySQL says `DROP CHECK`, MariaDB `DROP CONSTRAINT`), new or changed ones added.
+fn check_clauses(
+    original: &TableDefinition,
+    edited: &TableDefinition,
+    engine: Engine,
+) -> AppResult<(Vec<String>, Vec<String>)> {
+    let same = |a: &CheckConstraint, b: &CheckConstraint| {
+        a.name == b.name && a.expression.trim() == b.expression.trim()
+    };
+    let drop_keyword = if engine == Engine::Mariadb {
+        "DROP CONSTRAINT"
+    } else {
+        "DROP CHECK"
+    };
+    let (mut drops, mut adds) = (Vec::new(), Vec::new());
+    for check in original
+        .checks
+        .iter()
+        .filter(|check| !check.name.is_empty())
+    {
+        let counterpart = edited
+            .checks
+            .iter()
+            .find(|candidate| candidate.original_name.as_deref() == Some(check.name.as_str()));
+        if counterpart.is_none_or(|candidate| !same(check, candidate)) {
+            drops.push(format!("{drop_keyword} {}", quote_identifier(&check.name)));
+        }
+    }
+    for check in &edited.checks {
+        let before = check.original_name.as_deref().and_then(|name| {
+            original
+                .checks
+                .iter()
+                .find(|candidate| candidate.name == name)
+        });
+        if before.is_none_or(|previous| !same(previous, check)) {
+            adds.push(format!("ADD {}", check_sql(check)?));
+        }
+    }
+    Ok((drops, adds))
+}
+
 /// `CONVERT TO CHARACTER SET` needs the character set, which a collation name starts with.
 pub fn charset_of_collation(collation: &str) -> &str {
     collation.split('_').next().unwrap_or(collation)
@@ -391,9 +445,13 @@ pub fn alter_table_statements(
     let (key_drops, key_adds) = foreign_key_clauses(database, original, edited, &map)?;
     let (index_drops, index_adds) = index_clauses(original, edited, &map)?;
 
-    let mut main = index_drops;
+    let (check_drops, check_adds) = check_clauses(original, edited, engine)?;
+    // A check may mention a column or index that is about to change, so checks come off first and go on last.
+    let mut main = check_drops;
+    main.extend(index_drops);
     main.extend(column_clauses(original, edited, engine)?);
     main.extend(index_adds);
+    main.extend(check_adds);
     let (before, after) = (&original.options, &edited.options);
     let mut options = TableOptions::default();
     if before.engine != after.engine {
@@ -491,6 +549,88 @@ mod tests {
             sql,
             "CREATE TABLE `shop`.`orders` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `customer_id` int NOT NULL,\n  `total` decimal(10,2) NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_customer` (`customer_id`),\n  CONSTRAINT `fk_customer` FOREIGN KEY (`customer_id`) REFERENCES `shop`.`customers` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT\n) ENGINE=InnoDB DEFAULT COLLATE=utf8mb4_bin COMMENT='Customer orders'"
         );
+    }
+
+    fn check(name: &str, expression: &str) -> CheckConstraint {
+        CheckConstraint {
+            original_name: Some(name.to_owned()),
+            name: name.to_owned(),
+            expression: expression.to_owned(),
+        }
+    }
+
+    #[test]
+    fn checks_and_invisible_columns_are_written_in_create_table() {
+        let mut table = orders();
+        table.original_name = None;
+        table.checks = vec![
+            check("total_positive", "`total` >= 0"),
+            CheckConstraint {
+                original_name: None,
+                name: String::new(),
+                expression: "customer_id > 0".into(),
+            },
+        ];
+        table.columns[1].invisible = true;
+
+        let sql = create_table_statement("shop", &table).unwrap();
+
+        assert!(
+            sql.contains("`customer_id` int NOT NULL INVISIBLE"),
+            "{sql}"
+        );
+        assert!(
+            sql.contains(
+                "  CONSTRAINT `total_positive` CHECK (`total` >= 0),\n  CHECK (customer_id > 0)\n)"
+            ),
+            "{sql}"
+        );
+    }
+
+    #[test]
+    fn checks_are_dropped_with_the_keyword_of_the_engine_and_added_last() {
+        let mut original = orders();
+        original.checks = vec![check("c1", "total > 0"), check("c2", "total < 100")];
+        let mut edited = original.clone();
+        edited.checks.remove(0);
+        edited.checks[0].expression = "total < 500".into();
+        edited.checks.push(CheckConstraint {
+            original_name: None,
+            name: "c3".into(),
+            expression: "customer_id <> 0".into(),
+        });
+        edited.columns.push(new_column("note", "text"));
+
+        let mysql = super::alter_table_statements("shop", &original, &edited, false, Engine::Mysql)
+            .unwrap();
+        let mariadb =
+            super::alter_table_statements("shop", &original, &edited, false, Engine::Mariadb)
+                .unwrap();
+
+        assert_eq!(
+            mysql,
+            [
+                "ALTER TABLE `shop`.`orders` DROP CHECK `c1`,\n  DROP CHECK `c2`,\n  ADD COLUMN `note` text NOT NULL,\n  ADD CONSTRAINT `c2` CHECK (total < 500),\n  ADD CONSTRAINT `c3` CHECK (customer_id <> 0)"
+            ]
+        );
+        assert!(mariadb[0].contains("DROP CONSTRAINT `c1`") && !mariadb[0].contains("DROP CHECK"));
+    }
+
+    #[test]
+    fn unchanged_checks_cause_no_statements_and_bad_ones_are_rejected() {
+        let mut table = orders();
+        table.checks = vec![check("c1", "total > 0")];
+        let mut empty = table.clone();
+        empty.checks[0].expression = "  ".into();
+        let mut unbalanced = table.clone();
+        unbalanced.checks[0].expression = "total > (1".into();
+        let mut twice = table.clone();
+        twice.checks.push(check("C1", "total < 9"));
+
+        assert!(alter(&table, &table).is_empty());
+        for bad in [empty, unbalanced, twice] {
+            assert!(matches!(validate(&bad), Err(AppError::Validation(_))));
+        }
     }
 
     #[test]

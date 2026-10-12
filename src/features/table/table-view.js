@@ -1,8 +1,9 @@
 import { confirmDialog, h } from "../../lib/dom.js";
 import { displayCell, isSpecial } from "../grid/cell-format.js";
+import { openCellDialog } from "../grid/cell-dialog.js";
 import { createGrid } from "../grid/grid.js";
 import { FILTER_OPERATORS, describeFilter, makeFilter, nextSort } from "./filters.js";
-import { NO_CHANGES, addInsert, changeCount, editCell, editInsert, removeInsert, toChanges, toggleDeleted } from "./pending.js";
+import { NO_CHANGES, addInsert, changeCount, editCell, editInsert, removeInsert, rowKey, toChanges, toggleDeleted } from "./pending.js";
 
 const PAGE_ROWS = 500;
 /** Rows kept in memory per tab. Past this, narrow the result with a filter. */
@@ -23,10 +24,12 @@ export function createTableView({ tab, data }) {
   let loading = false;
   let sort = null;
   let filters = [];
+  /** The exact number of matching rows, once asked for; it is stale as soon as the filters or the rows change. */
+  let exactCount = null;
   let pending = NO_CHANGES;
   let confirmedKeyless = false;
 
-  const grid = createGrid({ onSort: changeSort, onEdit: edit, onSelect: () => drawToolbar(), onNearEnd: () => void loadMore() });
+  const grid = createGrid({ onSort: changeSort, onEdit: edit, onSelect: () => drawToolbar(), onNearEnd: () => void loadMore(), onOpenCell: openCell });
   const filterColumn = h("select", { "aria-label": "Filter column" });
   const filterOperator = h(
     "select",
@@ -39,6 +42,7 @@ export function createTableView({ tab, data }) {
   const message = h("span", { class: "error-text table-message" });
   const structureButton = h("button", { type: "button", title: "Columns, indexes and foreign keys", onClick: () => data.openStructure() }, "Structure");
   structureButton.hidden = !editable;
+  const countButton = h("button", { type: "button", class: "ghost", title: "Count every matching row (can take a while on a big table)", onClick: () => void countRows() }, "Count rows");
   const addButton = h("button", { type: "button", onClick: addRow }, "Add row");
   const deleteButton = h("button", { type: "button", onClick: deleteRow }, "Delete row");
   const nullButton = h("button", { type: "button", onClick: setNull }, "Set NULL");
@@ -57,7 +61,7 @@ export function createTableView({ tab, data }) {
     { class: "table-view" },
     h("div", { class: "table-toolbar" }, filterForm, chips, h("span", { class: "spacer" }), structureButton, addButton, deleteButton, nullButton, discardButton, applyButton),
     grid.element,
-    h("div", { class: "table-footer" }, status, message),
+    h("div", { class: "table-footer" }, status, countButton, message),
   );
 
   const columnIndex = (name) => columns.findIndex((column) => column.name === name);
@@ -128,7 +132,8 @@ export function createTableView({ tab, data }) {
     );
     const more = rows.length >= MAX_LOADED_ROWS ? " · limit reached, add a filter to see other rows" : hasMore ? " · scroll for more" : "";
     const keyNote = editable && columns.length > 0 && primaryKey.length === 0 ? " · no primary key" : "";
-    status.textContent = loading ? "Loading…" : `${numberFormat.format(rows.length)} row${rows.length === 1 ? "" : "s"} loaded${more}${keyNote}${editable ? "" : " · read-only"}`;
+    const total = exactCount === null ? "" : ` of ${numberFormat.format(exactCount)}`;
+    status.textContent = loading ? "Loading…" : `${numberFormat.format(rows.length)}${total} row${(exactCount ?? rows.length) === 1 ? "" : "s"} loaded${more}${keyNote}${editable ? "" : " · read-only"}`;
   }
 
   function nextPageCursor() {
@@ -145,6 +150,7 @@ export function createTableView({ tab, data }) {
     drawToolbar();
     try {
       const page = await data.browse({ limit: PAGE_ROWS, sort: sort ? [sort] : [], filters, ...(reset ? {} : nextPageCursor()) });
+      if (reset) exactCount = null;
       rows = reset ? page.rows : [...rows, ...page.rows];
       ({ columns, primaryKey, hasMore, keyset } = page);
       if (reset) {
@@ -274,6 +280,38 @@ export function createTableView({ tab, data }) {
       return;
     }
     await load({ reset: true });
+  }
+
+  async function countRows() {
+    countButton.disabled = true;
+    message.textContent = "";
+    try {
+      exactCount = await data.count(filters);
+    } catch (error) {
+      message.textContent = error.message;
+    } finally {
+      countButton.disabled = false;
+      drawToolbar();
+    }
+  }
+
+  /** Double-clicking a value the grid only shows in part (binary, long text) opens it in full. */
+  function openCell(row, col) {
+    if (isInsert(row) || !isSpecial(rows[row][col])) return false;
+    const column = columns[col];
+    let key;
+    try {
+      key = rowKey(rows[row], columns, primaryKey);
+    } catch (error) {
+      message.textContent = error.message;
+      return true;
+    }
+    openCellDialog({
+      title: `${tab.name}.${column.name}`,
+      load: () => data.readCell({ column: column.name, key }),
+      onApply: canEdit(row, col) ? (text) => setValue(row, col, text) : null,
+    });
+    return true;
   }
 
   void load({ reset: true });

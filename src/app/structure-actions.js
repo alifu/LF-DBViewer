@@ -3,7 +3,8 @@ import { showMenu } from "../features/structure/menu.js";
 import { reviewSql } from "../features/structure/review-dialog.js";
 import { buildCallSql } from "../features/structure/routine-call.js";
 import { openRunDialog } from "../features/structure/run-dialog.js";
-import { alertDialog } from "../lib/dom.js";
+import { field, formDialog, input } from "../features/admin/admin-dialogs.js";
+import { alertDialog, h } from "../lib/dom.js";
 import * as transitions from "../state/app-state.js";
 
 const OBJECT_LABELS = { table: "table", view: "view", procedure: "procedure", function: "function", trigger: "trigger", event: "event" };
@@ -192,6 +193,7 @@ export function createStructureActions({ api, store, schema, admin }) {
         return [
           { label: "Open data", onSelect: open("table") },
           { label: "Structure…", onSelect: open("structure") },
+          { label: "Duplicate…", onSelect: act("Duplicate table", () => duplicateTable(connectionId, database, name)) },
           { label: "Maintenance…", onSelect: act("Maintain table", () => admin.openMaintenance(connectionId, database, [name])) },
           { label: "Export table…", onSelect: () => schema.openTransfer(connectionId, database, "export", { tables: [name] }) },
           "-",
@@ -208,6 +210,23 @@ export function createStructureActions({ api, store, schema, admin }) {
     }
   }
 
+  /** Duplicate a table: ask for the new name, then review the SQL. Foreign keys are not copied. */
+  async function duplicateTable(connectionId, database, source) {
+    const definition = await api("table_definition", { connectionId, database, table: source }, { label: `Read structure of ${source}` });
+    const columns = definition.columns.filter((column) => column.generated === null).map((column) => column.name);
+    const name = input({ value: `${source}_copy`, "aria-label": "Name of the copy", required: true });
+    const withData = h("input", { type: "checkbox", checked: true, "aria-label": "Copy the rows too" });
+    const dialog = formDialog({
+      title: `Duplicate ${source}`,
+      fields: [field("Name of the copy", name), h("label", { class: "check" }, withData, "Copy the rows too"), h("p", { class: "muted" }, "Columns and indexes are copied. Foreign keys and triggers are not.")],
+      submitLabel: "Review SQL…",
+      submit: () => runChange(connectionId, { kind: "copyTable", database, source, target: name.value.trim(), withData: withData.checked, columns }, { title: `Duplicate ${source}`, confirmLabel: "Create copy" }),
+    });
+    name.focus();
+    name.select();
+    return dialog;
+  }
+
   /** Reads a table's definition, lets `mutate` change a copy, and runs the difference after review. */
   async function editTable(connectionId, database, table, mutate, review = {}) {
     const original = await api("table_definition", { connectionId, database, table }, { label: `Read structure of ${table}` });
@@ -216,6 +235,7 @@ export function createStructureActions({ api, store, schema, admin }) {
 
   return {
     editTable,
+    duplicateTable,
     newDatabase: (connectionId) => guarded("New database", () => newDatabase(connectionId))(),
     showMenu: (event, target) => showMenu(event, menuItems(target)),
     designerData,

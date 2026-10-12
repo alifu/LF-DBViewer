@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  addColumn, addForeignKey, addIndex, emptyTable, formatIndexColumns, hasChanges, isTextType, moveColumn, parseIndexColumns,
-  parseNameList, primaryKeyColumns, removeColumn, renameColumn, setDefault, setPrimaryKey, uniqueName, updateColumn,
+  addCheck, addColumn, addForeignKey, addIndex, emptyTable, formatIndexColumns, hasChanges, isTextType, moveColumn, updateCheck, parseIndexColumns,
+  parseNameList, primaryKeyColumns, removeCheck, removeColumn, renameColumn, setDefault, setPrimaryKey, uniqueName, updateColumn,
 } from "./designer-state.js";
 
 const withIndexAndKey = () => {
@@ -129,4 +129,28 @@ test("editing never changes the table it started from", () => {
 
   assert.equal(original.columns.length, 1);
   assert.equal(original.columns[0].name, "id");
+});
+
+test("checks are added with a free name, edited and removed without touching the original", () => {
+  const original = emptyTable("t");
+
+  const one = addCheck(original);
+  const two = addCheck(one);
+  const edited = updateCheck(two, 1, { expression: "qty > 0" });
+
+  assert.deepEqual(two.checks.map((check) => check.name), ["chk", "chk_2"]);
+  assert.equal(edited.checks[1].expression, "qty > 0");
+  assert.equal(removeCheck(edited, 0).checks.length, 1);
+  assert.equal(original.checks.length, 0);
+});
+
+test("a table from an older backend without checks still works", () => {
+  const legacy = { ...emptyTable("t") };
+  delete legacy.checks;
+
+  assert.equal(addCheck(legacy).checks.length, 1);
+});
+
+test("new columns are visible", () => {
+  assert.equal(addColumn(emptyTable("t")).columns[1].invisible, false);
 });

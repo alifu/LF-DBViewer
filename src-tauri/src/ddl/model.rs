@@ -45,6 +45,9 @@ pub struct ColumnDefinition {
     pub comment: String,
     #[serde(default)]
     pub generated: Option<Generated>,
+    /// Left out of `SELECT *` and plain `INSERT`s (MySQL 8.0.23+, MariaDB 10.3+).
+    #[serde(default)]
+    pub invisible: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -146,6 +149,18 @@ pub struct TableOptions {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CheckConstraint {
+    #[serde(default)]
+    pub original_name: Option<String>,
+    /// Empty lets the server name it.
+    #[serde(default)]
+    pub name: String,
+    /// The condition, without the surrounding `CHECK ( )`.
+    pub expression: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TableDefinition {
     #[serde(default)]
     pub original_name: Option<String>,
@@ -155,6 +170,8 @@ pub struct TableDefinition {
     pub indexes: Vec<IndexDefinition>,
     #[serde(default)]
     pub foreign_keys: Vec<ForeignKeyDefinition>,
+    #[serde(default)]
+    pub checks: Vec<CheckConstraint>,
     #[serde(default)]
     pub options: TableOptions,
 }
@@ -175,6 +192,7 @@ pub(crate) mod samples {
             collation: None,
             comment: String::new(),
             generated: None,
+            invisible: false,
         }
     }
 
@@ -222,6 +240,7 @@ pub(crate) mod samples {
                 index(IndexKind::Index, "idx_customer", &["customer_id"]),
             ],
             foreign_keys: vec![],
+            checks: vec![],
             options: TableOptions {
                 engine: Some("InnoDB".into()),
                 ..TableOptions::default()

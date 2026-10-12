@@ -50,6 +50,8 @@ pub fn run() {
             files_commands::write_export_file,
             data_commands::browse_table,
             data_commands::apply_row_changes,
+            data_commands::count_table_rows,
+            data_commands::read_table_cell,
             query_commands::split_statements,
             query_commands::open_query_session,
             query_commands::close_query_session,

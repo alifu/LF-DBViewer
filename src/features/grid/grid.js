@@ -1,10 +1,10 @@
 import { h } from "../../lib/dom.js";
+import { gridTemplate, totalWidth, withWidth } from "./column-widths.js";
 import { visibleRange } from "./window.js";
 
 export const ROW_HEIGHT = 24;
 const OVERSCAN_ROWS = 12;
 const ROW_NUMBER_WIDTH = 60;
-const COLUMN_WIDTH = 180;
 /** Ask for more rows when this close to the end of what is loaded. */
 const NEAR_END_ROWS = 60;
 
@@ -14,7 +14,7 @@ const NEAR_END_ROWS = 60;
  * `{ columns: [{ name, detail, sort }], rowCount, cellAt(row, col) -> { text, className },
  *    rowClass(row), canEdit(row, col), editText(row, col) }`.
  */
-export function createGrid({ onSort, onEdit, onSelect, onNearEnd }) {
+export function createGrid({ onSort, onEdit, onSelect, onNearEnd, onOpenCell = () => false }) {
   const header = h("div", { class: "grid-header" });
   const body = h("div", { class: "grid-body" });
   const element = h("div", { class: "grid", tabIndex: 0 }, header, body);
@@ -22,22 +22,47 @@ export function createGrid({ onSort, onEdit, onSelect, onNearEnd }) {
   let selected = null;
   let editor = null;
   let frame = 0;
+  /** `{ [columnName]: px }`, kept while the grid shows the same columns. */
+  let widths = {};
 
-  function drawHeader() {
-    const template = [ROW_NUMBER_WIDTH, ...model.columns.map(() => COLUMN_WIDTH)].map((width) => `${width}px`).join(" ");
-    const width = `${ROW_NUMBER_WIDTH + model.columns.length * COLUMN_WIDTH}px`;
-    element.style.setProperty("--grid-columns", template);
+  function applyWidths() {
+    const names = model.columns.map((column) => column.name);
+    element.style.setProperty("--grid-columns", gridTemplate(ROW_NUMBER_WIDTH, names, widths));
+    const width = `${totalWidth(ROW_NUMBER_WIDTH, names, widths)}px`;
     header.style.width = width;
     body.style.width = width;
+  }
+
+  /** Dragging the right edge of a heading resizes its column; the rows follow without being redrawn. */
+  function startResize(event, column) {
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const startWidth = widths[column.name] ?? header.querySelector(`[data-heading="${CSS.escape(column.name)}"]`)?.offsetWidth ?? 180;
+    const move = (moveEvent) => {
+      widths = withWidth(widths, column.name, startWidth + moveEvent.clientX - startX);
+      applyWidths();
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+  }
+
+  function drawHeader() {
+    applyWidths();
     header.replaceChildren(
       h("div", { class: "grid-cell row-number" }, "#"),
       ...model.columns.map((column) =>
         h(
           "div",
-          { class: "grid-cell grid-heading", title: `${column.name} ${column.detail}`, onClick: () => onSort(column.name) },
+          { class: "grid-cell grid-heading", dataset: { heading: column.name }, title: `${column.name} ${column.detail}`, onClick: () => onSort(column.name) },
           h("strong", {}, column.name),
           h("span", { class: "muted" }, column.detail),
           column.sort && h("span", { class: "sort-mark" }, column.sort === "desc" ? "▼" : "▲"),
+          h("span", { class: "resize-handle", title: "Drag to resize", onPointerdown: (event) => startResize(event, column), onClick: (event) => event.stopPropagation() }),
         ),
       ),
     );
@@ -118,7 +143,9 @@ export function createGrid({ onSort, onEdit, onSelect, onNearEnd }) {
   });
   body.addEventListener("dblclick", (event) => {
     const position = cellPosition(event.target);
-    if (position !== null && editor === null) startEdit(position);
+    if (position === null || editor !== null) return;
+    if (position.col >= 0 && onOpenCell(position.row, position.col) === true) return;
+    startEdit(position);
   });
   new ResizeObserver(scheduleDraw).observe(element);
 

@@ -42,6 +42,17 @@ pub enum StructureChange {
         database: String,
         name: String,
     },
+    /// A new table with the same columns and indexes (not foreign keys), optionally with the rows.
+    /// `columns` are the ones to copy rows for: every column that is not generated.
+    CopyTable {
+        database: String,
+        source: String,
+        target: String,
+        #[serde(default)]
+        with_data: bool,
+        #[serde(default)]
+        columns: Vec<String>,
+    },
     CreateTable {
         database: String,
         table: Box<TableDefinition>,
@@ -137,6 +148,50 @@ impl StructureChange {
                     "TRUNCATE TABLE {}",
                     qualified(database, name)
                 )])
+            }
+            Self::CopyTable {
+                database,
+                source,
+                target,
+                with_data,
+                columns,
+            } => {
+                for (name, what) in [
+                    (database, "Database"),
+                    (source, "Source table"),
+                    (target, "New table"),
+                ] {
+                    check_identifier(name, what)?;
+                }
+                check_not_system(database)?;
+                if source.eq_ignore_ascii_case(target) {
+                    return Err(AppError::Validation(
+                        "Give the copy a different name".into(),
+                    ));
+                }
+                let mut statements = vec![format!(
+                    "CREATE TABLE {} LIKE {}",
+                    qualified(database, target),
+                    qualified(database, source)
+                )];
+                if *with_data {
+                    if columns.is_empty() {
+                        return Err(AppError::Validation(
+                            "There are no columns to copy rows for".into(),
+                        ));
+                    }
+                    let list = columns
+                        .iter()
+                        .map(|name| quote_identifier(name))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    statements.push(format!(
+                        "INSERT INTO {} ({list}) SELECT {list} FROM {}",
+                        qualified(database, target),
+                        qualified(database, source)
+                    ));
+                }
+                Ok(statements)
             }
             Self::CreateTable { database, table } => {
                 check_not_system(database)?;
@@ -241,6 +296,40 @@ mod tests {
             statements(r#"{"kind":"truncateTable","database":"shop","name":"orders"}"#).unwrap(),
             ["TRUNCATE TABLE `shop`.`orders`"]
         );
+    }
+
+    #[test]
+    fn a_copy_is_created_like_the_source_and_filled_only_when_asked() {
+        let structure_only =
+            r#"{"kind":"copyTable","database":"shop","source":"orders","target":"orders_copy"}"#;
+        let with_rows = r#"{"kind":"copyTable","database":"shop","source":"orders","target":"orders_copy","withData":true,"columns":["id","total"]}"#;
+
+        assert_eq!(
+            statements(structure_only).unwrap(),
+            ["CREATE TABLE `shop`.`orders_copy` LIKE `shop`.`orders`"]
+        );
+        assert_eq!(
+            statements(with_rows).unwrap(),
+            [
+                "CREATE TABLE `shop`.`orders_copy` LIKE `shop`.`orders`",
+                "INSERT INTO `shop`.`orders_copy` (`id`, `total`) SELECT `id`, `total` FROM `shop`.`orders`"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_copy_needs_a_new_name_and_columns_when_it_carries_rows() {
+        for json in [
+            r#"{"kind":"copyTable","database":"shop","source":"orders","target":"ORDERS"}"#,
+            r#"{"kind":"copyTable","database":"shop","source":"orders","target":"c","withData":true}"#,
+            r#"{"kind":"copyTable","database":"mysql","source":"user","target":"u2"}"#,
+            r#"{"kind":"copyTable","database":"shop","source":"orders","target":" "}"#,
+        ] {
+            assert!(
+                matches!(statements(json), Err(AppError::Validation(_))),
+                "{json}"
+            );
+        }
     }
 
     #[test]
