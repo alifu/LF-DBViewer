@@ -51,3 +51,10 @@
 .tok-number, .tok-bool, .tok-null, .tok-atom { color: var(--syn-number); }
 .tok-typeName, .tok-standard { color: var(--syn-type); }
 .tok-comment, .tok-lineComment, .tok-blockComment { color: var(--syn-comment); font-style: italic; }
+
+.query-editor .cm-current-statement { background: color-mix(in srgb, var(--accent) 11%, transparent); border-radius: 2px; }
+.query-toolbar { flex-wrap: wrap; }
+.result-export-dialog { width: min(640px, 94vw); }
+.result-export-dialog .field { margin-bottom: 8px; }
+.result-export-dialog .review-sql { max-height: 12vh; }
+.csv-sample { max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

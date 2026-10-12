@@ -195,6 +195,7 @@ export function createStructureActions({ api, store, schema, admin }) {
           { label: "Structure…", onSelect: open("structure") },
           { label: "Duplicate…", onSelect: act("Duplicate table", () => duplicateTable(connectionId, database, name)) },
           { label: "Maintenance…", onSelect: act("Maintain table", () => admin.openMaintenance(connectionId, database, [name])) },
+          { label: "Import CSV…", onSelect: () => schema.openTransfer(connectionId, database, "csvimport", { table: name }) },
           { label: "Export table…", onSelect: () => schema.openTransfer(connectionId, database, "export", { tables: [name] }) },
           "-",
           { label: "Truncate…", danger: true, onSelect: act("Truncate table", () => truncateTable(connectionId, database, name)) },

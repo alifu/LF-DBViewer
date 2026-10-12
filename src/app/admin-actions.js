@@ -21,6 +21,11 @@ export function createAdminActions({ api, store }) {
       engines: () => read("list_engines", "Read storage engines"),
       charsets: () => read("list_charsets", "Read character sets"),
       users: () => read("list_users", "Read accounts"),
+      plugins: () => read("list_plugins", "Read plugins"),
+      replication: () => read("replication_status", "Read replication status"),
+      binaryLogs: () => read("list_binary_logs", "Read binary logs"),
+      binlogEvents: (file, limit) => read("list_binlog_events", `Read events of ${file}`, { file, limit }),
+      tableStats: (database) => read("list_table_stats", `Read table sizes of ${database}`, { database }),
       grants: (user, host) => read("show_user_grants", `Read privileges of ${user}@${host}`, { user, host }),
       maintain: (operation, database, tables) => read("maintain_tables", `${operation} ${tables.length} table(s) of ${database}`, { operation, database, tables }),
       /** Resolves true when the change was applied. The SQL shown and logged has passwords masked. */

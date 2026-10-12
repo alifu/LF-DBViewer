@@ -1,7 +1,7 @@
 import { h } from "../../lib/dom.js";
 import {
   DEFAULT_EXPORT_OPTIONS, IDLE_EXPORT, applyExportEvent, buildExportRequest, defaultFileName, exportProblem, failExport, finishExport,
-  formatBytes, formatDuration, percent,
+  formatBytes, formatDuration, percent, withGzip,
 } from "./transfer-state.js";
 
 const OPTION_LABELS = [
@@ -28,6 +28,8 @@ export function createExportView({ tab, data }) {
   let selectedViews = new Set(tab.tables ? [] : allViews);
   let options = { ...DEFAULT_EXPORT_OPTIONS };
   let path = "";
+  /** Used while no path is chosen yet; afterwards the path's own `.gz` ending says whether the file is compressed. */
+  let gzip = false;
   let progress = IDLE_EXPORT;
   let jobId = null;
   let drawScheduled = false;
@@ -54,6 +56,7 @@ export function createExportView({ tab, data }) {
         h("div", {}, selection("Tables", allTables, selectedTables, (next) => (selectedTables = next)), selection("Views", allViews, selectedViews, (next) => (selectedViews = next))),
         h("fieldset", { class: "transfer-group" }, h("legend", {}, "Options"), ...OPTION_LABELS.map(([key, label]) => check(options[key], (value) => (options = { ...options, [key]: value }), label))),
       ),
+      check(/\.gz$/i.test(path) || (path === "" && gzip), (value) => ((gzip = value), (path = withGzip(path, value)), draw()), "Compress the file with gzip (.sql.gz); an import reads it directly"),
       h(
         "div",
         { class: "transfer-file" },
@@ -100,7 +103,7 @@ export function createExportView({ tab, data }) {
   }
 
   async function choose() {
-    const picked = await data.pickPath(defaultFileName(tab.database, new Date()));
+    const picked = await data.pickPath(defaultFileName(tab.database, new Date(), gzip || /\.gz$/i.test(path)));
     if (picked) {
       path = picked;
       draw();

@@ -81,6 +81,17 @@ pub enum AdminChange {
         user: String,
         host: String,
     },
+    /// A locked account cannot log in (MySQL 5.7.6+, MariaDB 10.4.2+).
+    SetAccountLock {
+        user: String,
+        host: String,
+        locked: bool,
+    },
+    /// The next login must choose a new password.
+    ExpirePassword {
+        user: String,
+        host: String,
+    },
     Grant {
         user: String,
         host: String,
@@ -225,6 +236,15 @@ impl AdminChange {
             Self::DropUser { user, host } => {
                 Ok(vec![format!("DROP USER {}", account(user, host)?)])
             }
+            Self::SetAccountLock { user, host, locked } => Ok(vec![format!(
+                "ALTER USER {} ACCOUNT {}",
+                account(user, host)?,
+                if *locked { "LOCK" } else { "UNLOCK" }
+            )]),
+            Self::ExpirePassword { user, host } => Ok(vec![format!(
+                "ALTER USER {} PASSWORD EXPIRE",
+                account(user, host)?
+            )]),
             Self::Grant {
                 user,
                 host,
@@ -314,6 +334,23 @@ mod tests {
             sql(r#"{"kind":"dropUser","user":"o'brien","host":"localhost"}"#).unwrap(),
             ["DROP USER 'o''brien'@'localhost'"]
         );
+    }
+
+    #[test]
+    fn accounts_can_be_locked_unlocked_and_have_their_password_expired() {
+        assert_eq!(
+            sql(r#"{"kind":"setAccountLock","user":"app","host":"%","locked":true}"#).unwrap(),
+            ["ALTER USER 'app'@'%' ACCOUNT LOCK"]
+        );
+        assert_eq!(
+            sql(r#"{"kind":"setAccountLock","user":"app","host":"h","locked":false}"#).unwrap(),
+            ["ALTER USER 'app'@'h' ACCOUNT UNLOCK"]
+        );
+        assert_eq!(
+            sql(r#"{"kind":"expirePassword","user":"app","host":""}"#).unwrap(),
+            ["ALTER USER 'app'@'%' PASSWORD EXPIRE"]
+        );
+        assert!(sql(r#"{"kind":"setAccountLock","user":" ","host":"%","locked":true}"#).is_err());
     }
 
     #[test]

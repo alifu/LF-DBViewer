@@ -114,3 +114,34 @@ export function visibleProcesses(processes, { hideSleeping }) {
 export function formatSeconds(seconds) {
   return seconds >= SECONDS_PER.hour ? formatUptime(seconds) : `${seconds} s`;
 }
+
+/** The newest `limit` readings, oldest first; the input is left as it was. */
+export function pushHistory(history, value, limit = 60) {
+  return [...history, value].slice(-limit);
+}
+
+/** SVG polyline points for a series, scaled to the box; a flat or empty series draws along the bottom. */
+export function sparklinePoints(values, width, height) {
+  if (values.length < 2) return "";
+  const max = Math.max(...values);
+  const min = Math.min(...values);
+  const span = max - min;
+  const step = width / (values.length - 1);
+  return values.map((value, index) => `${(index * step).toFixed(1)},${(span === 0 ? height : height - ((value - min) / span) * height).toFixed(1)}`).join(" ");
+}
+
+/** What an account's flags say, in the words shown next to it. */
+export function accountBadges(account) {
+  return [account.locked === true && "locked", account.passwordExpired === true && "password expired"].filter(Boolean);
+}
+
+/** Names the two replication threads' health in one line. */
+export function replicationSummary(info) {
+  const value = (name) => info.replica.find((entry) => entry.name === name)?.value;
+  if (info.replica.length === 0) return info.source.length === 0 ? "Not a replica, and binary logging is off." : "Not a replica; this server writes a binary log.";
+  const io = value("Replica_IO_Running") ?? value("Slave_IO_Running");
+  const sql = value("Replica_SQL_Running") ?? value("Slave_SQL_Running");
+  const behind = value("Seconds_Behind_Source") ?? value("Seconds_Behind_Master");
+  const healthy = io === "Yes" && sql === "Yes";
+  return `${healthy ? "Replicating" : "Replication is not running"}${behind === undefined ? "" : ` · ${behind} s behind`}`;
+}

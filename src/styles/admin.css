@@ -36,3 +36,8 @@
 .privilege-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 2px 12px; margin: 4px 0 10px; max-height: 38vh; overflow-y: auto; }
 .maintenance-dialog { width: min(760px, 94vw); }
 .maintenance-results { max-height: 30vh; overflow: auto; margin-bottom: 10px; }
+.badge { margin-left: 6px; padding: 0 6px; border-radius: 8px; font-size: 11px; background: var(--surface-2); border: 1px solid var(--border); color: var(--muted); }
+.status-trend { display: flex; align-items: center; gap: 10px; margin: 6px 0 10px; }
+.sparkline { width: 240px; height: 36px; }
+.sparkline polyline { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.fk-pair { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }

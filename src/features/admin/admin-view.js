@@ -1,4 +1,5 @@
 import { h } from "../../lib/dom.js";
+import { createBinaryLogsPanel, createPluginsPanel, createReplicationPanel } from "./panels-server.js";
 import { createDatabasesPanel, createEnginesPanel, createProcessesPanel, createStatusPanel, createUsersPanel, createVariablesPanel } from "./panels.js";
 
 const SECTIONS = [
@@ -8,6 +9,9 @@ const SECTIONS = [
   ["variables", "Variables"],
   ["users", "Users"],
   ["engines", "Engines & character sets"],
+  ["plugins", "Plugins"],
+  ["replication", "Replication"],
+  ["binlogs", "Binary logs"],
 ];
 
 /**
@@ -23,6 +27,9 @@ export function createAdminView({ data, onMaintain }) {
     variables: createVariablesPanel({ data, review }),
     users: createUsersPanel({ data, review }),
     engines: createEnginesPanel({ data }),
+    plugins: createPluginsPanel({ data }),
+    replication: createReplicationPanel({ data }),
+    binlogs: createBinaryLogsPanel({ data }),
   };
   const loaded = new Set();
   let current = null;

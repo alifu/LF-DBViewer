@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { computeRates, filterByName, formatSeconds, formatUptime, numbersOf, privilegesFor, revokablePrivileges, scopeFromForm, summarizeStatus, visibleProcesses } from "./admin-state.js";
+import { accountBadges, computeRates, filterByName, formatSeconds, formatUptime, numbersOf, privilegesFor, pushHistory, replicationSummary, revokablePrivileges, scopeFromForm, sparklinePoints, summarizeStatus, visibleProcesses } from "./admin-state.js";
 
 test("uptime reads in the two largest useful units", () => {
   assert.equal(formatUptime(45), "45 s");
@@ -78,4 +78,31 @@ test("sleeping connections can be hidden", () => {
   assert.equal(visibleProcesses(processes, { hideSleeping: false }).length, 2);
   assert.equal(formatSeconds(30), "30 s");
   assert.equal(formatSeconds(7200), "2 h 00 min");
+});
+
+test("history keeps the newest readings without changing the old list", () => {
+  const old = [1, 2, 3];
+
+  assert.deepEqual(pushHistory(old, 4, 3), [2, 3, 4]);
+  assert.deepEqual(old, [1, 2, 3]);
+});
+
+test("a sparkline scales to its box and needs two readings", () => {
+  assert.equal(sparklinePoints([5], 100, 20), "");
+  assert.equal(sparklinePoints([0, 10], 100, 20), "0.0,20.0 100.0,0.0");
+  assert.equal(sparklinePoints([3, 3, 3], 100, 20), "0.0,20.0 50.0,20.0 100.0,20.0");
+});
+
+test("account badges name the locked and expired states", () => {
+  assert.deepEqual(accountBadges({ locked: true, passwordExpired: true }), ["locked", "password expired"]);
+  assert.deepEqual(accountBadges({ locked: null, passwordExpired: false }), []);
+});
+
+test("the replication summary tells replica, source and idle servers apart", () => {
+  const pair = (name, value) => ({ name, value });
+
+  assert.match(replicationSummary({ replica: [], source: [] }), /binary logging is off/);
+  assert.match(replicationSummary({ replica: [], source: [pair("File", "b.1")] }), /writes a binary log/);
+  assert.equal(replicationSummary({ replica: [pair("Replica_IO_Running", "Yes"), pair("Replica_SQL_Running", "Yes"), pair("Seconds_Behind_Source", "3")], source: [] }), "Replicating · 3 s behind");
+  assert.match(replicationSummary({ replica: [pair("Slave_IO_Running", "No"), pair("Slave_SQL_Running", "Yes")], source: [] }), /not running/);
 });

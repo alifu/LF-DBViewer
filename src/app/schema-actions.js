@@ -52,7 +52,7 @@ export function createSchemaActions({ api, store }) {
     openServer: (connectionId) => store.update((state) => transitions.openTab(state, { connectionId, database: "", name: "Server", kind: "admin" })),
     /** An export or import tab; `extra` can carry `tables` to export only those. */
     openTransfer(connectionId, database, kind, extra = {}) {
-      const name = kind === "import" ? `Import into ${database}` : `Export ${extra.tables?.length === 1 ? extra.tables[0] : database}`;
+      const name = { import: `Import into ${database}`, csvimport: `Import CSV into ${extra.table}` }[kind] ?? `Export ${extra.tables?.length === 1 ? extra.tables[0] : database}`;
       store.update((current) => transitions.openTab(current, { connectionId, database, name, kind, ...extra }));
     },
     /** A tab for a table, view, routine, trigger or event that does not exist yet. */

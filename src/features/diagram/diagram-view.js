@@ -403,8 +403,10 @@ export function createDiagramView({ tab, data }) {
         child,
         parent,
         defaultName,
-        submit: async ({ name, onDelete, onUpdate }) => {
-          const applied = await data.addForeignKey({ table: child.table, columns: [child.column], refDatabase: parent.database, refTable: parent.table, refColumns: [parent.column], name, onUpdate, onDelete });
+        childColumns: model.byId.get(from.boxId).rows.map((entry) => entry.name),
+        parentColumns: parentBox.rows.map((entry) => entry.name),
+        submit: async ({ name, columns, refColumns, onDelete, onUpdate }) => {
+          const applied = await data.addForeignKey({ table: child.table, columns, refDatabase: parent.database, refTable: parent.table, refColumns, name, onUpdate, onDelete });
           if (applied) await reload();
           return applied;
         },

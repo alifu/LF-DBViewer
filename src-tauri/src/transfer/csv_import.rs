@@ -14,6 +14,8 @@ use crate::schema::table_columns;
 use crate::sql::{placeholders, qualified, quote_identifier};
 
 const PREVIEW_ROWS: usize = 8;
+/// How much of the start of a file is looked at to find its delimiter.
+const SNIFF_BYTES: usize = 64 * 1024;
 const MAX_BATCH_ROWS: usize = 1000;
 /// The server allows at most 65,535 placeholders in one statement.
 const MAX_PLACEHOLDERS: usize = 60_000;
@@ -21,6 +23,42 @@ const PROGRESS_EVERY: Duration = Duration::from_millis(250);
 
 fn yes() -> bool {
     true
+}
+
+/// The delimiter a file most likely uses: whichever of `,` `;` tab `|` appears most on its first line outside quotes.
+pub fn guess_delimiter(sample: &str) -> u8 {
+    let first_line = sample
+        .trim_start_matches('\u{feff}')
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("");
+    let mut counts = [(b',', 0usize), (b';', 0), (b'\t', 0), (b'|', 0)];
+    let mut quoted = false;
+    for byte in first_line.bytes() {
+        if byte == b'"' {
+            quoted = !quoted;
+        } else if !quoted
+            && let Some(entry) = counts.iter_mut().find(|(candidate, _)| *candidate == byte)
+        {
+            entry.1 += 1;
+        }
+    }
+    // The first on a tie, which is the comma.
+    counts
+        .iter()
+        .fold(
+            (b',', 0),
+            |best, &(byte, count)| if count > best.1 { (byte, count) } else { best },
+        )
+        .0
+}
+
+fn describe_delimiter(byte: u8) -> String {
+    if byte == b'\t' {
+        "\\t".to_owned()
+    } else {
+        (byte as char).to_string()
+    }
 }
 
 /// `,` `;` `|` and a tab (written `\t` or `tab`), or any single character.
@@ -40,6 +78,8 @@ pub fn parse_delimiter(text: &str) -> AppResult<u8> {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CsvPreview {
+    /// The delimiter that was used: the one asked for, or the one detected for `auto`.
+    pub delimiter: String,
     /// The header row, or `column 1`, `column 2`… when the file has none.
     pub headers: Vec<String>,
     pub rows: Vec<Vec<String>>,
@@ -61,7 +101,18 @@ fn csv_error(error: &csv::Error) -> AppError {
 }
 
 pub fn preview_csv(path: &str, delimiter: &str, has_header: bool) -> AppResult<CsvPreview> {
-    let mut reader = open_reader(path, parse_delimiter(delimiter)?)?;
+    let delimiter = if delimiter.eq_ignore_ascii_case("auto") {
+        let mut sample = vec![0u8; SNIFF_BYTES];
+        let read = std::io::Read::read(
+            &mut File::open(path)
+                .map_err(|error| AppError::Validation(format!("Cannot open {path}: {error}")))?,
+            &mut sample,
+        )?;
+        guess_delimiter(&String::from_utf8_lossy(&sample[..read]))
+    } else {
+        parse_delimiter(delimiter)?
+    };
+    let mut reader = open_reader(path, delimiter)?;
     let size = std::fs::metadata(Path::new(path))?.len();
     let mut records = reader.records();
     let take = |records: &mut csv::StringRecordsIter<'_, File>| -> AppResult<Option<Vec<String>>> {
@@ -76,6 +127,7 @@ pub fn preview_csv(path: &str, delimiter: &str, has_header: bool) -> AppResult<C
     let headers = match (has_header, first) {
         (_, None) => {
             return Ok(CsvPreview {
+                delimiter: describe_delimiter(delimiter),
                 headers: Vec::new(),
                 rows,
                 size,
@@ -97,6 +149,7 @@ pub fn preview_csv(path: &str, delimiter: &str, has_header: bool) -> AppResult<C
         }
     }
     Ok(CsvPreview {
+        delimiter: describe_delimiter(delimiter),
         headers,
         rows,
         size,
@@ -365,6 +418,31 @@ mod tests {
             collation: None,
             generated,
         }
+    }
+
+    #[test]
+    fn the_delimiter_is_detected_from_the_first_line_ignoring_quoted_text() {
+        assert_eq!(guess_delimiter("id,name,note\n1,a,b"), b',');
+        assert_eq!(guess_delimiter("id;name;note\n1;a;b"), b';');
+        assert_eq!(guess_delimiter("id\tname\tnote\n"), b'\t');
+        assert_eq!(guess_delimiter("id|name\n"), b'|');
+        assert_eq!(guess_delimiter("\"a,b,c,d\";x;y"), b';');
+        assert_eq!(guess_delimiter("\u{feff}\n\nid;name"), b';');
+        assert_eq!(guess_delimiter("no delimiters here"), b',');
+        assert_eq!(guess_delimiter(""), b',');
+    }
+
+    #[test]
+    fn auto_detection_drives_the_preview() {
+        let path = temp_file("id;name\n1;Ann\n".as_bytes());
+
+        let preview = preview_csv(path.to_str().unwrap(), "auto", true).unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        assert_eq!(
+            (preview.delimiter.as_str(), preview.headers.len()),
+            (";", 2)
+        );
     }
 
     #[test]

@@ -24,6 +24,7 @@
     "@lezer/highlight": "^1.2.5",
     "@tauri-apps/api": "~2.11.1",
     "@tauri-apps/plugin-dialog": "~2.7.0",
-    "codemirror": "^6.0.2"
+    "codemirror": "^6.0.2",
+    "sql-formatter": "^15.9.0"
   }
 }

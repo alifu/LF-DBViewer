@@ -1917,6 +1917,84 @@ mod admin_tests {
 
     #[tokio::test]
     #[ignore = "needs a live MySQL/MariaDB server (LFDB_TEST_* variables)"]
+    async fn plugins_replication_binary_logs_and_table_sizes_can_be_read() {
+        let (manager, id) = connect().await;
+        let mut conn = manager.get(&id).await.unwrap().conn().await.unwrap();
+        let database = unique("lfdb_info");
+        conn.query_drop(format!("CREATE DATABASE `{database}`"))
+            .await
+            .unwrap();
+        conn.query_drop(format!(
+            "CREATE TABLE `{database}`.`big` (id INT PRIMARY KEY, body TEXT)"
+        ))
+        .await
+        .unwrap();
+        conn.query_drop(format!(
+            "CREATE TABLE `{database}`.`small` (id INT PRIMARY KEY)"
+        ))
+        .await
+        .unwrap();
+        let values: Vec<String> = (1..=200)
+            .map(|n| format!("({n}, REPEAT('x', 500))"))
+            .collect();
+        conn.query_drop(format!(
+            "INSERT INTO `{database}`.`big` VALUES {}",
+            values.join(",")
+        ))
+        .await
+        .unwrap();
+        conn.query_drop(format!("ANALYZE TABLE `{database}`.`big`"))
+            .await
+            .unwrap();
+
+        let plugins = server::plugins(&mut conn).await.unwrap();
+        let replication = server::replication(&mut conn).await.unwrap();
+        let logs = server::binary_logs(&mut conn).await;
+        let events = match &logs {
+            Ok(list) if !list.is_empty() => server::binlog_events(&mut conn, &list[0].name, 20)
+                .await
+                .ok(),
+            _ => None,
+        };
+        let refused = server::binlog_events(&mut conn, "x'; DROP DATABASE y; --", 10).await;
+        let tables = server::table_stats(&mut conn, &database).await.unwrap();
+        conn.query_drop(format!("DROP DATABASE `{database}`"))
+            .await
+            .unwrap();
+
+        assert!(
+            plugins
+                .iter()
+                .any(|plugin| plugin.name.eq_ignore_ascii_case("InnoDB")
+                    && plugin.status == "ACTIVE")
+        );
+        assert!(
+            replication.replica.is_empty(),
+            "this test server is not a replica"
+        );
+        assert!(
+            refused.is_err(),
+            "a name that is not a plain file name is refused"
+        );
+        if let (Ok(list), Some(events)) = (&logs, &events) {
+            assert!(
+                list[0].bytes > 0 && !events.is_empty(),
+                "binary logging is on: the log has events"
+            );
+        }
+        assert_eq!(
+            tables
+                .iter()
+                .map(|table| table.name.as_str())
+                .collect::<Vec<_>>(),
+            ["big", "small"],
+            "largest first"
+        );
+        assert!(tables[0].data_bytes > 0 && tables[0].rows > 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a live MySQL/MariaDB server (LFDB_TEST_* variables)"]
     async fn a_global_variable_can_be_changed_and_put_back() {
         let (manager, id) = connect().await;
         let mut conn = manager.get(&id).await.unwrap().conn().await.unwrap();
@@ -1992,6 +2070,7 @@ mod admin_tests {
         let (manager, id) = connect().await;
         let active = manager.get(&id).await.unwrap();
         let mut conn = active.conn().await.unwrap();
+        let engine = active.engine();
         let database = unique("lfdb_priv");
         let user = unique("lfdb_user");
         conn.query_drop(format!("CREATE DATABASE `{database}`"))
@@ -2009,7 +2088,7 @@ mod admin_tests {
 
         apply(&mut conn, serde_json::json!({"kind": "createUser", "user": user, "host": "%", "password": "p@ss'word"})).await;
         apply(&mut conn, serde_json::json!({"kind": "grant", "user": user, "host": "%", "scope": on_database, "privileges": ["select", "insert"]})).await;
-        let listed = list_users(&mut conn).await.unwrap();
+        let listed = list_users(&mut conn, engine).await.unwrap();
         let grants = show_grants(&mut conn, &user, "%").await.unwrap();
 
         // Log in as the new account: the password works, SELECT and INSERT are allowed, DELETE is not.
@@ -2032,12 +2111,39 @@ mod admin_tests {
         let after = show_grants(&mut conn, &user, "%").await.unwrap();
         apply(&mut conn, serde_json::json!({"kind": "setPassword", "user": user, "host": "%", "password": "changed"})).await;
         let relogin = Conn::new(as_user("changed")).await;
+        apply(&mut conn, serde_json::json!({"kind": "setAccountLock", "user": user, "host": "%", "locked": true})).await;
+        let locked_login = Conn::new(as_user("changed")).await;
+        let locked_flag = list_users(&mut conn, engine)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|account| account.user == user)
+            .and_then(|account| account.locked);
+        apply(&mut conn, serde_json::json!({"kind": "setAccountLock", "user": user, "host": "%", "locked": false})).await;
+        let unlocked_login = Conn::new(as_user("changed")).await;
+        let unlocked_flag = list_users(&mut conn, engine)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|account| account.user == user)
+            .and_then(|account| account.locked);
+        apply(
+            &mut conn,
+            serde_json::json!({"kind": "expirePassword", "user": user, "host": "%"}),
+        )
+        .await;
+        let expired_flag = list_users(&mut conn, engine)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|account| account.user == user)
+            .and_then(|account| account.password_expired);
         apply(
             &mut conn,
             serde_json::json!({"kind": "dropUser", "user": user, "host": "%"}),
         )
         .await;
-        let remaining = list_users(&mut conn).await.unwrap();
+        let remaining = list_users(&mut conn, engine).await.unwrap();
         conn.query_drop(format!("DROP DATABASE `{database}`"))
             .await
             .unwrap();
@@ -2080,6 +2186,15 @@ mod admin_tests {
             "{names_after:?}"
         );
         assert!(relogin.is_ok());
+        assert!(locked_login.is_err(), "a locked account cannot log in");
+        assert_eq!(locked_flag, Some(true));
+        assert!(unlocked_login.is_ok());
+        assert_eq!(unlocked_flag, Some(false));
+        assert_eq!(
+            expired_flag,
+            Some(true),
+            "the list says the password is expired"
+        );
         assert!(remaining.iter().all(|account| account.user != user));
     }
 

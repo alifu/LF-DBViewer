@@ -1,15 +1,21 @@
-import { h } from "../../lib/dom.js";
+import { confirmDialog, h } from "../../lib/dom.js";
 import { displayCell } from "../grid/cell-format.js";
 import { createGrid } from "../grid/grid.js";
 import { buildCompletionSchema } from "./completion-schema.js";
 import { createSqlEditor } from "./editor.js";
+import { formatSql } from "./format.js";
+import { openResultExportDialog } from "./result-export-dialog.js";
 import { addToHistory, filterHistory, historyKey, loadHistory, saveHistory } from "./history.js";
 import { NO_RESULTS, applyEvent, describeStatement, failRun, finishRun, formatCount, setLabel, startRun } from "./results.js";
-import { chooseToRun, explainTexts } from "./statement-at.js";
+import { chooseToRun, explainTexts, statementAt } from "./statement-at.js";
 
 const MESSAGES_TAB = "messages";
 const NO_DATABASE = "";
 const MIN_PANE_PX = 90;
+/** Past this size the current-statement tint is skipped, so typing in a huge script stays instant. */
+const MAX_HIGHLIGHT_CHARS = 300_000;
+const HIGHLIGHT_DELAY_MS = 250;
+const baseName = (path) => path.split("/").pop();
 
 function statusIcon(status) {
   return { done: "✓", error: "✕", cancelled: "■", running: "…", pending: "·" }[status];
@@ -30,6 +36,10 @@ export function createQueryView({ tab, connection, data, storage }) {
   let results = NO_RESULTS;
   let activeResultId = MESSAGES_TAB;
   let lastRunText = null;
+  /** The `.sql` file this tab was opened from or saved to, and its text at that moment. */
+  let filePath = null;
+  let savedText = null;
+  let highlightTimer = null;
   let drawScheduled = false;
   let destroyed = false;
 
@@ -40,6 +50,11 @@ export function createQueryView({ tab, connection, data, storage }) {
   const explainButton = h("button", { type: "button", title: "EXPLAIN the current statement", onClick: () => void run("current", { explain: true }) }, "Explain");
   const cancelButton = h("button", { type: "button", class: "danger", title: "Stop the running statement (⌘.)", onClick: () => void cancel() }, "Cancel");
   const historyButton = h("button", { type: "button", onClick: openHistory }, "History");
+  const openButton = h("button", { type: "button", title: "Open a .sql file into this tab", onClick: () => void openFile() }, "Open…");
+  const saveButton = h("button", { type: "button", title: "Save to a .sql file (⌘S)", onClick: () => void saveFile() }, "Save");
+  const formatButton = h("button", { type: "button", title: "Lay out the selection, or the whole script, readably", onClick: () => format() }, "Format");
+  const exportButton = h("button", { type: "button", title: "Write every row of the shown result to a CSV or JSON file", onClick: () => exportActive() }, "Export…");
+  const fileLabel = h("span", { class: "muted query-state" });
   const runState = h("span", { class: "muted query-state" });
   const editorHost = h("div", { class: "query-editor" });
   const divider = h("div", { class: "query-divider", role: "separator", "aria-orientation": "horizontal", title: "Drag to resize" });
@@ -49,7 +64,7 @@ export function createQueryView({ tab, connection, data, storage }) {
   const element = h(
     "div",
     { class: "query-view" },
-    h("div", { class: "query-toolbar" }, runButton, runAllButton, explainButton, cancelButton, h("span", { class: "spacer" }), runState, databaseSelect, historyButton),
+    h("div", { class: "query-toolbar" }, runButton, runAllButton, explainButton, cancelButton, openButton, saveButton, formatButton, fileLabel, h("span", { class: "spacer" }), runState, exportButton, databaseSelect, historyButton),
     editorHost,
     divider,
     h("div", { class: "query-results" }, resultTabs, resultBody, resultFooter),
@@ -60,8 +75,97 @@ export function createQueryView({ tab, connection, data, storage }) {
     engine: connection.engine,
     onRun: (mode) => void run(mode),
     onCancel: () => void cancel(),
-    onChange: () => {},
+    onChange: () => drawFile(),
+    onSave: () => void saveFile(),
+    onCursor: () => scheduleHighlight(),
   });
+
+  // ---- files, formatting, the current statement ---------------------------------
+
+  const isDirty = () => (filePath === null ? false : editor.getText() !== savedText);
+
+  function drawFile() {
+    fileLabel.textContent = filePath === null ? "" : `${baseName(filePath)}${isDirty() ? " •" : ""}`;
+    fileLabel.title = filePath ?? "";
+  }
+
+  async function openFile() {
+    const unsaved = filePath === null ? editor.getText().trim() !== "" && editor.getText() !== lastRunText : isDirty();
+    if (unsaved && !(await confirmDialog({ title: "Replace the text in this tab?", body: "It has changes that were not saved. Opening a file replaces them.", confirmLabel: "Open and replace", danger: true }))) return;
+    const picked = await data.pickOpenPath();
+    if (typeof picked !== "string" || picked === "") return;
+    try {
+      const text = await data.readFile(picked);
+      editor.setText(text);
+      [filePath, savedText, lastRunText] = [picked, text, null];
+      runState.textContent = "";
+      drawFile();
+    } catch (error) {
+      runState.textContent = error.message;
+    }
+  }
+
+  async function saveFile() {
+    let path = filePath;
+    if (path === null) {
+      path = await data.pickSavePath(`${tab.name.toLowerCase().replace(/\s+/g, "-")}.sql`);
+      if (typeof path !== "string" || path === "") return;
+      if (!/\.[A-Za-z0-9]+$/.test(path)) path += ".sql";
+    }
+    const text = editor.getText();
+    try {
+      await data.writeFile(path, text);
+      [filePath, savedText] = [path, text];
+      runState.textContent = `Saved ${baseName(path)}`;
+      drawFile();
+    } catch (error) {
+      runState.textContent = error.message;
+    }
+  }
+
+  /** Formats the selection if there is one, else everything. A script that cannot be parsed is left alone. */
+  function format() {
+    const { from, to } = editor.getSelectionRange();
+    const text = editor.getText();
+    try {
+      if (to > from) editor.replaceRange(from, to, formatSql(text.slice(from, to), connection.engine));
+      else editor.setText(formatSql(text, connection.engine));
+      runState.textContent = "";
+    } catch (error) {
+      runState.textContent = `Cannot format this: ${String(error.message).split("\n")[0]}`;
+    }
+  }
+
+  function scheduleHighlight() {
+    clearTimeout(highlightTimer);
+    highlightTimer = setTimeout(() => void refreshHighlight(), HIGHLIGHT_DELAY_MS);
+  }
+
+  /** With more than one statement in the editor, the one under the cursor is tinted; a selection replaces it. */
+  async function refreshHighlight() {
+    if (destroyed) return;
+    const text = editor.getText();
+    const { from, to } = editor.getSelectionRange();
+    if (to > from || text.length > MAX_HIGHLIGHT_CHARS) return editor.highlight(null);
+    try {
+      const spans = await data.split(text);
+      if (destroyed || editor.getText() !== text) return;
+      const current = spans.length > 1 ? statementAt(spans, editor.getCursor()) : null;
+      editor.highlight(current === null ? null : { from: current.start, to: current.end });
+    } catch {
+      editor.highlight(null);
+    }
+  }
+
+  function exportActive() {
+    const set = activeSet();
+    if (set === null) return;
+    openResultExportDialog({
+      sql: results.statements[set.statementIndex].sql,
+      database: database === NO_DATABASE ? null : database,
+      data: { pickPath: data.pickResultPath, start: data.exportResult, cancel: data.cancelJob },
+    });
+  }
 
   // ---- layout -------------------------------------------------------------
 
@@ -190,6 +294,7 @@ export function createQueryView({ tab, connection, data, storage }) {
   function drawToolbar(selected) {
     const busy = results.running;
     for (const button of [runButton, runAllButton, explainButton, databaseSelect]) button.disabled = busy;
+    exportButton.disabled = busy || selected === null;
     cancelButton.hidden = !busy;
     runState.textContent = busy ? "Running…" : "";
     if (selected === null) {
@@ -342,9 +447,10 @@ export function createQueryView({ tab, connection, data, storage }) {
     },
     focus: () => editor.focus(),
     /** True for text that was written but never run, or changed since the last run. */
-    hasUnsavedChanges: () => editor.getText().trim() !== "" && editor.getText() !== lastRunText,
+    hasUnsavedChanges: () => (filePath === null ? editor.getText().trim() !== "" && editor.getText() !== lastRunText : isDirty()),
     destroy() {
       destroyed = true;
+      clearTimeout(highlightTimer);
       editor.destroy();
       void sessionPromise.then((sessionId) => data.closeSession(sessionId)).catch(() => {});
     },

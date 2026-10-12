@@ -28,10 +28,16 @@ export function percent(done, total) {
 
 const two = (number) => String(number).padStart(2, "0");
 
-/** `shop_20261012_1004.sql`, in local time. */
-export function defaultFileName(database, date) {
+/** `shop_20261012_1004.sql` (or `.sql.gz`), in local time. */
+export function defaultFileName(database, date, gzip = false) {
   const day = `${date.getFullYear()}${two(date.getMonth() + 1)}${two(date.getDate())}`;
-  return `${database}_${day}_${two(date.getHours())}${two(date.getMinutes())}.sql`;
+  return `${database}_${day}_${two(date.getHours())}${two(date.getMinutes())}.sql${gzip ? ".gz" : ""}`;
+}
+
+/** The path with `.gz` added or taken off, so the checkbox and the file name agree. */
+export function withGzip(path, enabled) {
+  const plain = path.replace(/\.gz$/i, "");
+  return enabled && plain !== "" ? `${plain}.gz` : plain;
 }
 
 export const DEFAULT_EXPORT_OPTIONS = Object.freeze({

@@ -191,6 +191,185 @@ pub async fn database_stats(conn: &mut Conn) -> AppResult<Vec<DatabaseStats>> {
         .collect())
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginInfo {
+    pub name: String,
+    pub status: String,
+    pub kind: String,
+    pub library: Option<String>,
+    pub description: Option<String>,
+}
+
+pub async fn plugins(conn: &mut Conn) -> AppResult<Vec<PluginInfo>> {
+    let rows: Vec<Row> = conn
+        .query("SELECT PLUGIN_NAME, PLUGIN_STATUS, PLUGIN_TYPE, PLUGIN_LIBRARY, PLUGIN_DESCRIPTION FROM information_schema.PLUGINS ORDER BY PLUGIN_TYPE, PLUGIN_NAME")
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(texts)
+        .map(|row| PluginInfo {
+            name: required(row.first()),
+            status: required(row.get(1)),
+            kind: required(row.get(2)),
+            library: optional(row.get(3)),
+            description: optional(row.get(4)),
+        })
+        .collect())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplicationInfo {
+    /// What this server reports about the source it copies from; empty when it is not a replica.
+    pub replica: Vec<NameValue>,
+    /// This server's own binary log position, as a source; empty when binary logging is off.
+    pub source: Vec<NameValue>,
+}
+
+/// The first row of the first statement the server accepts, as name and value pairs. Newer servers renamed
+/// `SLAVE`, `MASTER` and `BINARY LOG STATUS`, so several spellings are tried. Empty when the server returns no row.
+async fn first_row(conn: &mut Conn, statements: &[&str]) -> AppResult<Vec<NameValue>> {
+    let mut last_error = None;
+    for statement in statements {
+        match conn.query::<Row, _>(*statement).await {
+            Ok(rows) => {
+                return Ok(rows
+                    .into_iter()
+                    .next()
+                    .map(|row| {
+                        let names: Vec<String> = row
+                            .columns_ref()
+                            .iter()
+                            .map(|column| column.name_str().into_owned())
+                            .collect();
+                        names
+                            .into_iter()
+                            .zip(texts(row))
+                            .filter_map(|(name, value)| {
+                                value
+                                    .filter(|text| !text.is_empty())
+                                    .map(|value| NameValue { name, value })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default());
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.map_or_else(
+        || AppError::Validation("No statement to try".into()),
+        AppError::from,
+    ))
+}
+
+pub async fn replication(conn: &mut Conn) -> AppResult<ReplicationInfo> {
+    let replica = first_row(conn, &["SHOW REPLICA STATUS", "SHOW SLAVE STATUS"]).await?;
+    // Binary logging may be off, which is an answer ("nothing to show"), not a failure.
+    let source = first_row(conn, &["SHOW BINARY LOG STATUS", "SHOW MASTER STATUS"])
+        .await
+        .unwrap_or_default();
+    Ok(ReplicationInfo { replica, source })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BinaryLog {
+    pub name: String,
+    pub bytes: u64,
+}
+
+pub async fn binary_logs(conn: &mut Conn) -> AppResult<Vec<BinaryLog>> {
+    let rows: Vec<Row> = conn.query("SHOW BINARY LOGS").await?;
+    Ok(rows
+        .into_iter()
+        .map(texts)
+        .map(|row| BinaryLog {
+            name: required(row.first()),
+            bytes: count(row.get(1).and_then(Option::as_ref)),
+        })
+        .collect())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BinlogEvent {
+    pub position: u64,
+    pub kind: String,
+    pub server_id: u64,
+    pub end_position: u64,
+    pub info: String,
+}
+
+pub const MAX_BINLOG_EVENTS: u32 = 500;
+
+/// The first events of one binary log. The file name is checked so it cannot carry anything but a name.
+pub async fn binlog_events(conn: &mut Conn, file: &str, limit: u32) -> AppResult<Vec<BinlogEvent>> {
+    if file.is_empty()
+        || !file
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        return Err(AppError::Validation(format!(
+            "\"{file}\" is not a binary log name"
+        )));
+    }
+    let rows: Vec<Row> = conn
+        .query(format!(
+            "SHOW BINLOG EVENTS IN {} LIMIT {}",
+            quote_string(file),
+            limit.clamp(1, MAX_BINLOG_EVENTS)
+        ))
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(texts)
+        .map(|row| BinlogEvent {
+            position: count(row.get(1).and_then(Option::as_ref)),
+            kind: required(row.get(2)),
+            server_id: count(row.get(3).and_then(Option::as_ref)),
+            end_position: count(row.get(4).and_then(Option::as_ref)),
+            info: shorten(required(row.get(5))),
+        })
+        .collect())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableStats {
+    pub name: String,
+    pub engine: Option<String>,
+    pub rows: u64,
+    pub data_bytes: u64,
+    pub index_bytes: u64,
+    pub free_bytes: u64,
+    pub collation: Option<String>,
+}
+
+pub async fn table_stats(conn: &mut Conn, database: &str) -> AppResult<Vec<TableStats>> {
+    let rows: Vec<Row> = conn
+        .exec(
+            "SELECT TABLE_NAME, ENGINE, TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH, DATA_FREE, TABLE_COLLATION FROM information_schema.TABLES \
+             WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE' ORDER BY (DATA_LENGTH + INDEX_LENGTH) DESC, TABLE_NAME",
+            (database,),
+        )
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(texts)
+        .map(|row| TableStats {
+            name: required(row.first()),
+            engine: optional(row.get(1)),
+            rows: count(row.get(2).and_then(Option::as_ref)),
+            data_bytes: count(row.get(3).and_then(Option::as_ref)),
+            index_bytes: count(row.get(4).and_then(Option::as_ref)),
+            free_bytes: count(row.get(5).and_then(Option::as_ref)),
+            collation: optional(row.get(6)),
+        })
+        .collect())
+}
+
 /// How a value is written in `SET GLOBAL name = …`: numbers and the words ON/OFF/TRUE/FALSE/DEFAULT as they are
 /// (a quoted number is refused for numeric variables), everything else as a string.
 pub fn variable_literal(value: &str) -> String {

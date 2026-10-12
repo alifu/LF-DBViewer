@@ -4,7 +4,10 @@ use super::structure::ExecutedStatements;
 use crate::admin::change::AdminChange;
 use crate::admin::grants::GrantEntry;
 use crate::admin::maintenance::{MaintenanceOp, MaintenanceRow, maintain};
-use crate::admin::server::{self, CharsetInfo, DatabaseStats, EngineInfo, NameValue, ProcessInfo};
+use crate::admin::server::{
+    self, BinaryLog, BinlogEvent, CharsetInfo, DatabaseStats, EngineInfo, NameValue, PluginInfo,
+    ProcessInfo, ReplicationInfo, TableStats,
+};
 use crate::admin::users::{self, UserAccount};
 use crate::error::AppResult;
 use crate::state::AppState;
@@ -85,7 +88,54 @@ pub async fn list_users(
     state: State<'_, AppState>,
     connection_id: String,
 ) -> AppResult<Vec<UserAccount>> {
-    read!(state, connection_id, users::list_users)
+    let active = state.connections.get(&connection_id).await?;
+    let mut conn = active.conn().await?;
+    users::list_users(&mut conn, active.engine()).await
+}
+
+#[tauri::command]
+pub async fn list_plugins(
+    state: State<'_, AppState>,
+    connection_id: String,
+) -> AppResult<Vec<PluginInfo>> {
+    read!(state, connection_id, server::plugins)
+}
+
+#[tauri::command]
+pub async fn replication_status(
+    state: State<'_, AppState>,
+    connection_id: String,
+) -> AppResult<ReplicationInfo> {
+    read!(state, connection_id, server::replication)
+}
+
+#[tauri::command]
+pub async fn list_binary_logs(
+    state: State<'_, AppState>,
+    connection_id: String,
+) -> AppResult<Vec<BinaryLog>> {
+    read!(state, connection_id, server::binary_logs)
+}
+
+#[tauri::command]
+pub async fn list_binlog_events(
+    state: State<'_, AppState>,
+    connection_id: String,
+    file: String,
+    limit: u32,
+) -> AppResult<Vec<BinlogEvent>> {
+    let mut conn = state.connections.get(&connection_id).await?.conn().await?;
+    server::binlog_events(&mut conn, &file, limit).await
+}
+
+#[tauri::command]
+pub async fn list_table_stats(
+    state: State<'_, AppState>,
+    connection_id: String,
+    database: String,
+) -> AppResult<Vec<TableStats>> {
+    let mut conn = state.connections.get(&connection_id).await?.conn().await?;
+    server::table_stats(&mut conn, &database).await
 }
 
 #[tauri::command]

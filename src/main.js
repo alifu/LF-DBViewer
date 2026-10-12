@@ -13,6 +13,7 @@ import { createDiagramActions } from "./app/diagram-actions.js";
 import { createTransferActions } from "./app/transfer-actions.js";
 import { createQueryView } from "./features/query/query-view.js";
 import { databaseKey } from "./features/schema/tree.js";
+import { createCsvImportView } from "./features/transfer/csv-import-view.js";
 import { createExportView } from "./features/transfer/export-view.js";
 import { createImportView } from "./features/transfer/import-view.js";
 import { createDesignerView } from "./features/structure/designer-view.js";
@@ -114,6 +115,7 @@ function createTabView(tab) {
   if (DATA_KINDS.includes(tab.kind)) return createTableView({ tab, data: schema.tableData(tab) });
   if (tab.kind === "diagram") return createDiagramView({ tab, data: diagram.forTab(tab) });
   if (tab.kind === "admin") return createAdminView({ data: admin.forConnection(tab.connectionId), onMaintain: (database) => void admin.openMaintenance(tab.connectionId, database) });
+  if (tab.kind === "csvimport") return createCsvImportView({ tab, data: transfer.csvImportData(tab) });
   if (tab.kind === "export") return createExportView({ tab, data: transfer.exportData(tab) });
   if (tab.kind === "import") return createImportView({ tab, data: transfer.importData(tab) });
   if (DESIGNER_KINDS.includes(tab.kind)) return createDesignerView({ tab, data: structure.designerData(tab) });

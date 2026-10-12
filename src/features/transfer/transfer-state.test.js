@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  DEFAULT_EXPORT_OPTIONS, IDLE_EXPORT, IDLE_IMPORT, applyExportEvent, applyImportEvent, buildExportRequest, buildImportRequest, defaultFileName,
+  DEFAULT_EXPORT_OPTIONS, IDLE_EXPORT, IDLE_IMPORT, applyExportEvent, applyImportEvent, buildExportRequest, buildImportRequest, defaultFileName, withGzip,
   exportProblem, failExport, failImport, finishExport, finishImport, formatBytes, formatDuration, importProblem, percent,
 } from "./transfer-state.js";
 
@@ -97,4 +97,12 @@ test("import progress counts statements and collects failures", () => {
   assert.equal(finishImport(state, { cancelled: false, failed: false, errors: [], statements: 13, bytes: 1000 }).phase, "done");
   assert.equal(finishImport(state, { cancelled: true, failed: false, errors: [], statements: 5, bytes: 100 }).phase, "cancelled");
   assert.equal(failImport(state, "no such file").phase, "failed");
+});
+
+test("a compressed dump has .gz after .sql, and the checkbox keeps the path in step", () => {
+  assert.equal(defaultFileName("shop", new Date(2026, 9, 12, 9, 5), true), "shop_20261012_0905.sql.gz");
+  assert.equal(withGzip("/tmp/a.sql", true), "/tmp/a.sql.gz");
+  assert.equal(withGzip("/tmp/a.sql.gz", true), "/tmp/a.sql.gz");
+  assert.equal(withGzip("/tmp/a.sql.GZ", false), "/tmp/a.sql");
+  assert.equal(withGzip("", true), "");
 });

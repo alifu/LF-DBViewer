@@ -2,6 +2,7 @@ import { dataTable, searchBox } from "../../lib/data-table.js";
 import { confirmDialog, h } from "../../lib/dom.js";
 import { formatBytes } from "../transfer/transfer-state.js";
 import { computeRates, filterByName, formatSeconds, numbersOf, revokablePrivileges, summarizeStatus, visibleProcesses, describeScope } from "./admin-state.js";
+import { openTableStatsDialog } from "./panels-server.js";
 import { openPrivilegeDialog, openUserDialog, openVariableDialog } from "./admin-dialogs.js";
 
 const REFRESH_STATUS_MS = 5000;
@@ -13,12 +14,34 @@ function panel(element, load, { show = () => {}, hide = () => {} } = {}) {
   return { element, load, show, hide };
 }
 
+const SPARK_WIDTH = 240;
+const SPARK_HEIGHT = 36;
+
+function svgSparkline(points) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${SPARK_WIDTH} ${SPARK_HEIGHT}`);
+  svg.setAttribute("class", "sparkline");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Queries per second over time");
+  const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+  line.setAttribute("points", points);
+  svg.append(line);
+  return svg;
+}
+
 const failure = (box, error) => box.replaceChildren(h("p", { class: "error-text", role: "alert" }, error.message));
 const number = (value) => value.toLocaleString("en-US");
 
 export function createDatabasesPanel({ data, onMaintain }) {
   const box = h("div", { class: "admin-box" });
   const element = h("div", {}, h("div", { class: TOOLBAR }, h("button", { type: "button", onClick: () => void load() }, "Refresh")), box);
+  async function showTables(database) {
+    try {
+      await openTableStatsDialog({ database, load: () => data.tableStats(database) });
+    } catch (error) {
+      failure(box, error);
+    }
+  }
   async function load() {
     try {
       const stats = await data.databases();
@@ -33,7 +56,7 @@ export function createDatabasesPanel({ data, onMaintain }) {
             { label: "Data", cell: (row) => formatBytes(row.dataBytes), className: "num" },
             { label: "Indexes", cell: (row) => formatBytes(row.indexBytes), className: "num" },
             { label: "Free", cell: (row) => formatBytes(row.freeBytes), className: "num" },
-            { label: "", cell: (row) => (row.tables > 0 ? h("button", { type: "button", class: "ghost", onClick: () => onMaintain(row.name) }, "Maintain…") : "") },
+            { label: "", cell: (row) => (row.tables > 0 ? h("span", { class: "cell-actions" }, h("button", { type: "button", class: "ghost", onClick: () => void showTables(row.name) }, "Tables…"), h("button", { type: "button", class: "ghost", onClick: () => onMaintain(row.name) }, "Maintain…")) : "") },
           ],
           rows: stats,
         }),
@@ -83,14 +106,17 @@ export function createStatusPanel({ data }) {
   let entries = [];
   let filter = "";
   let timer = null;
+  let queryHistory = [];
   const tiles = h("div", { class: "status-tiles" });
+  const trend = h("div", { class: "status-trend" });
   const box = h("div", { class: "admin-box" });
   const auto = h("input", { type: "checkbox", checked: true, onChange: () => schedule() });
-  const element = h("div", {}, h("div", { class: TOOLBAR }, searchBox("Filter status", (text) => ((filter = text), draw())), h("label", { class: "check" }, auto, "Refresh every 5 s"), h("button", { type: "button", onClick: () => void load() }, "Refresh")), tiles, box);
+  const element = h("div", {}, h("div", { class: TOOLBAR }, searchBox("Filter status", (text) => ((filter = text), draw())), h("label", { class: "check" }, auto, "Refresh every 5 s"), h("button", { type: "button", onClick: () => void load() }, "Refresh")), tiles, trend, box);
 
   function draw() {
     const numbers = numbersOf(entries);
     tiles.replaceChildren(...summarizeStatus(numbers, rates).map((tile) => h("div", { class: "status-tile" }, h("div", { class: "muted" }, tile.label), h("strong", {}, tile.value), tile.detail && h("div", { class: "muted" }, tile.detail))));
+    drawTrend();
     box.replaceChildren(
       dataTable({
         columns: [
@@ -102,6 +128,12 @@ export function createStatusPanel({ data }) {
       }),
     );
   }
+  function drawTrend() {
+    const points = sparklinePoints(queryHistory, SPARK_WIDTH, SPARK_HEIGHT);
+    trend.replaceChildren(
+      ...(points === "" ? [] : [h("span", { class: "muted" }, `Queries per second, last ${queryHistory.length} readings`), svgSparkline(points)]),
+    );
+  }
   async function load() {
     try {
       const now = performance.now();
@@ -109,6 +141,7 @@ export function createStatusPanel({ data }) {
       const numbers = numbersOf(entries);
       rates = previous === null ? {} : computeRates(previous.numbers, numbers, (now - previous.at) / 1000);
       previous = { numbers, at: now };
+      if (rates.Questions !== undefined) queryHistory = pushHistory(queryHistory, rates.Questions);
       draw();
     } catch (error) {
       failure(box, error);
@@ -231,7 +264,7 @@ export function createUsersPanel({ data, review }) {
       ...(users.length === 0 ? [h("p", { class: "muted empty" }, "No accounts.")] : []),
       ...users.map((account) => {
         const isSelected = selected !== null && selected.user === account.user && selected.host === account.host;
-        return h("div", { class: isSelected ? "user-row selected" : "user-row", onClick: () => void select(account) }, h("strong", {}, account.user === "" ? "(anonymous)" : account.user), h("span", { class: "muted" }, `@${account.host}`));
+        return h("div", { class: isSelected ? "user-row selected" : "user-row", onClick: () => void select(account) }, h("strong", {}, account.user === "" ? "(anonymous)" : account.user), h("span", { class: "muted" }, `@${account.host}`), ...accountBadges(account).map((text) => h("span", { class: "badge" }, text)));
       }),
     );
   }
@@ -250,6 +283,18 @@ export function createUsersPanel({ data, review }) {
 
   const changed = async (change, title, extra = {}) => (await review(change, { title, ...extra })) && (void select(selected), true);
 
+  /** The list is read again so the badge and the button follow the server. */
+  async function refreshSelected(applied) {
+    if (!applied) return;
+    const { user, host } = selected;
+    await load();
+    selected = users.find((account) => account.user === user && account.host === host) ?? selected;
+    drawList();
+    await select(selected);
+  }
+  const lockChange = async (locked) => refreshSelected(await review({ kind: "setAccountLock", user: selected.user, host: selected.host, locked }, { title: `${locked ? "Lock" : "Unlock"} ${selected.user}@${selected.host}` }));
+  const expire = async () => refreshSelected(await review({ kind: "expirePassword", user: selected.user, host: selected.host }, { title: `Expire password of ${selected.user}@${selected.host}`, note: "The next login must choose a new password." }));
+
   function drawDetail(grants) {
     const { user, host } = selected;
     const rows = grants.map((entry) => {
@@ -267,6 +312,8 @@ export function createUsersPanel({ data, review }) {
       h("div", { class: TOOLBAR },
         h("button", { type: "button", onClick: () => openPrivilegeDialog({ user, host, databases: data.databaseNames(), tablesOf: data.tableNames, submit: (change) => changed(change, `Grant to ${user}@${host}`) }) }, "Grant privileges…"),
         h("button", { type: "button", onClick: () => openUserDialog({ mode: "password", user, host, submit: (change) => changed(change, `New password for ${user}@${host}`) }) }, "Change password…"),
+        h("button", { type: "button", onClick: () => void lockChange(!selected.locked) }, selected.locked ? "Unlock" : "Lock"),
+        h("button", { type: "button", onClick: () => void expire() }, "Expire password"),
         h("button", { type: "button", class: "danger", onClick: () => void review({ kind: "dropUser", user, host }, { title: `Drop user ${user}@${host}`, confirmLabel: "Drop user", danger: true, note: "The account can no longer log in." }).then((dropped) => dropped && ((selected = null), detail.replaceChildren(), load())) }, "Drop user…")),
       h("h4", {}, "Privileges"),
       ...(rows.length > 0 ? rows : [h("p", { class: "muted" }, "None.")]),
