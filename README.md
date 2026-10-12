@@ -24,6 +24,7 @@ make build     # release build of LF-DBViewer.app
 - Design tables, indexes and foreign keys, edit views, routines, triggers and events, with the SQL shown before it runs.
 - Export a database to a SQL file that loads back identically, and import SQL files of any size.
 - See what the server is doing (status, processes), change variables, manage users and privileges, and run table maintenance.
+- A relationship diagram of any database: drag tables, draw foreign keys, export SVG or PNG.
 - Light and dark themes (Settings, or ⌘,).
 
 ## Layout

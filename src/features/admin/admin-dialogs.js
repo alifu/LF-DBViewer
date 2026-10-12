@@ -3,7 +3,7 @@ import { dataTable } from "../../lib/data-table.js";
 import { privilegesFor, scopeFromForm } from "./admin-state.js";
 
 /** A small modal form. `submit()` resolves true to close it; a rejection is shown under the fields. */
-function formDialog({ title, fields, submitLabel, submit, className = "" }) {
+export function formDialog({ title, fields, submitLabel, submit, className = "" }) {
   const message = h("p", { class: "form-message error", role: "alert" });
   const submitButton = h("button", { type: "submit", class: "primary" }, submitLabel);
   const dialog = h(
@@ -37,8 +37,8 @@ function formDialog({ title, fields, submitLabel, submit, className = "" }) {
   return dialog;
 }
 
-const field = (label, control) => h("label", { class: "field", style: "margin-bottom:10px" }, h("span", {}, label), control);
-const input = (props = {}) => h("input", { spellcheck: false, autocomplete: "off", ...props });
+export const field = (label, control) => h("label", { class: "field", style: "margin-bottom:10px" }, h("span", {}, label), control);
+export const input = (props = {}) => h("input", { spellcheck: false, autocomplete: "off", ...props });
 
 export function openVariableDialog({ name, value, canPersist, submit }) {
   const valueInput = input({ value, "aria-label": name });

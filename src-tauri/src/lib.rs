@@ -18,8 +18,8 @@ use tauri::Manager;
 
 use commands::{
     admin as admin_commands, connection as connection_commands, data as data_commands,
-    profile as profile_commands, query as query_commands, schema as schema_commands,
-    structure as structure_commands, transfer as transfer_commands,
+    files as files_commands, profile as profile_commands, query as query_commands,
+    schema as schema_commands, structure as structure_commands, transfer as transfer_commands,
 };
 use state::AppState;
 
@@ -46,6 +46,8 @@ pub fn run() {
             schema_commands::list_databases,
             schema_commands::list_objects,
             schema_commands::object_definition,
+            schema_commands::database_diagram,
+            files_commands::write_export_file,
             data_commands::browse_table,
             data_commands::apply_row_changes,
             query_commands::split_statements,

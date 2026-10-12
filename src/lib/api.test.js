@@ -59,3 +59,14 @@ test("a label function describes the result, and failures fall back to the comma
   await assert.rejects(failing.call("browse_table", {}, { label: (page) => page.sql }));
   assert.equal(failing.logged[0].message, "browse_table: gone");
 });
+
+test("headers are passed to the backend only when given", async () => {
+  const seen = [];
+  const call = createApi({ invoke: async (...parts) => seen.push(parts), onLog: () => {}, now: () => 0 });
+
+  await call("plain", { a: 1 });
+  await call("raw", new Uint8Array([1]), { headers: { path: "%2Ftmp%2Fx.svg" } });
+
+  assert.deepEqual(seen[0], ["plain", { a: 1 }]);
+  assert.deepEqual(seen[1], ["raw", new Uint8Array([1]), { headers: { path: "%2Ftmp%2Fx.svg" } }]);
+});

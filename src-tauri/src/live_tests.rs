@@ -2014,3 +2014,123 @@ mod admin_tests {
         assert!(missing.iter().any(|row| row.kind == "error"), "{missing:?}");
     }
 }
+
+// ---- relationship diagram ----
+
+mod diagram_tests {
+    use mysql_async::prelude::Queryable;
+
+    use super::connect;
+    use crate::ddl::model::ReferentialAction;
+    use crate::schema::diagram::read_diagram;
+
+    fn unique(prefix: &str) -> String {
+        format!(
+            "{prefix}_{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..12]
+        )
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a live MySQL/MariaDB server (LFDB_TEST_* variables)"]
+    async fn tables_columns_and_every_kind_of_foreign_key_are_read() {
+        let (manager, id) = connect().await;
+        let mut conn = manager.get(&id).await.unwrap().conn().await.unwrap();
+        let (database, other) = (unique("lfdb_dia"), unique("lfdb_other"));
+        for sql in [
+            format!("CREATE DATABASE `{other}`"),
+            format!("CREATE TABLE `{other}`.`regions` (code CHAR(2) PRIMARY KEY) ENGINE=InnoDB"),
+            format!("CREATE DATABASE `{database}`"),
+            format!(
+                "CREATE TABLE `{database}`.`customers` (id INT PRIMARY KEY, name VARCHAR(40) NOT NULL, region CHAR(2), boss_id INT NULL, INDEX (region), CONSTRAINT fk_boss FOREIGN KEY (boss_id) REFERENCES customers (id) ON DELETE SET NULL, CONSTRAINT fk_region FOREIGN KEY (region) REFERENCES `{other}`.`regions` (code)) ENGINE=InnoDB"
+            ),
+            format!(
+                "CREATE TABLE `{database}`.`order_lines` (order_id INT, line_no INT, customer_id INT NOT NULL, PRIMARY KEY (order_id, line_no), INDEX (customer_id), CONSTRAINT fk_customer FOREIGN KEY (customer_id) REFERENCES customers (id) ON UPDATE CASCADE ON DELETE CASCADE) ENGINE=InnoDB"
+            ),
+            format!(
+                "CREATE TABLE `{database}`.`line_notes` (order_id INT, line_no INT, note TEXT, CONSTRAINT fk_line FOREIGN KEY (order_id, line_no) REFERENCES order_lines (order_id, line_no)) ENGINE=InnoDB"
+            ),
+            format!("CREATE VIEW `{database}`.`v` AS SELECT id FROM `{database}`.`customers`"),
+        ] {
+            conn.query_drop(sql.as_str())
+                .await
+                .unwrap_or_else(|error| panic!("{error}\n{sql}"));
+        }
+
+        let diagram = read_diagram(&mut conn, &database).await.unwrap();
+        conn.query_drop(format!("DROP DATABASE `{database}`"))
+            .await
+            .unwrap();
+        conn.query_drop(format!("DROP DATABASE `{other}`"))
+            .await
+            .unwrap();
+
+        let names: Vec<&str> = diagram
+            .tables
+            .iter()
+            .map(|table| table.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["customers", "line_notes", "order_lines"],
+            "views are not tables"
+        );
+        assert!(!diagram.truncated);
+        let lines = diagram
+            .tables
+            .iter()
+            .find(|table| table.name == "order_lines")
+            .unwrap();
+        assert_eq!(
+            lines
+                .columns
+                .iter()
+                .map(|column| (column.name.as_str(), column.primary_key))
+                .collect::<Vec<_>>(),
+            [
+                ("order_id", true),
+                ("line_no", true),
+                ("customer_id", false)
+            ]
+        );
+        let customers = diagram
+            .tables
+            .iter()
+            .find(|table| table.name == "customers")
+            .unwrap();
+        assert!(
+            customers
+                .columns
+                .iter()
+                .find(|column| column.name == "boss_id")
+                .unwrap()
+                .nullable
+        );
+        assert_eq!(diagram.relations.len(), 4);
+        let relation = |name: &str| {
+            diagram
+                .relations
+                .iter()
+                .find(|relation| relation.name == name)
+                .unwrap_or_else(|| panic!("{name} missing"))
+        };
+        let composite = relation("fk_line");
+        assert_eq!(
+            (composite.columns.clone(), composite.ref_columns.clone()),
+            (
+                vec!["order_id".to_owned(), "line_no".to_owned()],
+                vec!["order_id".to_owned(), "line_no".to_owned()]
+            )
+        );
+        assert_eq!(relation("fk_boss").ref_table, "customers");
+        assert_eq!(relation("fk_boss").on_delete, ReferentialAction::SetNull);
+        assert_eq!(relation("fk_region").ref_database, other);
+        assert_eq!(
+            (
+                relation("fk_customer").on_update,
+                relation("fk_customer").on_delete
+            ),
+            (ReferentialAction::Cascade, ReferentialAction::Cascade)
+        );
+    }
+}

@@ -4,10 +4,12 @@ import { createAdminActions } from "./app/admin-actions.js";
 import { createConnectionActions } from "./app/connection-actions.js";
 import { createSchemaActions } from "./app/schema-actions.js";
 import { createAdminView } from "./features/admin/admin-view.js";
+import { createDiagramView } from "./features/diagram/diagram-view.js";
 import { createDashboard } from "./features/dashboard/dashboard.js";
 import { createLogPanel } from "./features/log/log-panel.js";
 import { createQueryActions } from "./app/query-actions.js";
 import { createStructureActions } from "./app/structure-actions.js";
+import { createDiagramActions } from "./app/diagram-actions.js";
 import { createTransferActions } from "./app/transfer-actions.js";
 import { createQueryView } from "./features/query/query-view.js";
 import { databaseKey } from "./features/schema/tree.js";
@@ -43,6 +45,7 @@ const schema = createSchemaActions({ api, store });
 const admin = createAdminActions({ api, store });
 const structure = createStructureActions({ api, store, schema, admin });
 const transfer = createTransferActions({ api, store, schema });
+const diagram = createDiagramActions({ api, store, schema, structure, storage: browserStorage(window) });
 
 /** A new connection shows its databases, with the profile's default database already open. */
 async function showSchema(info) {
@@ -109,6 +112,7 @@ function createTabView(tab) {
     });
   }
   if (DATA_KINDS.includes(tab.kind)) return createTableView({ tab, data: schema.tableData(tab) });
+  if (tab.kind === "diagram") return createDiagramView({ tab, data: diagram.forTab(tab) });
   if (tab.kind === "admin") return createAdminView({ data: admin.forConnection(tab.connectionId), onMaintain: (database) => void admin.openMaintenance(tab.connectionId, database) });
   if (tab.kind === "export") return createExportView({ tab, data: transfer.exportData(tab) });
   if (tab.kind === "import") return createImportView({ tab, data: transfer.importData(tab) });

@@ -1,6 +1,7 @@
 use tauri::State;
 
 use crate::error::AppResult;
+use crate::schema::diagram::{Diagram, read_diagram};
 use crate::schema::{self, DatabaseInfo, ObjectKind, SchemaObjects};
 use crate::state::AppState;
 
@@ -33,4 +34,14 @@ pub async fn object_definition(
 ) -> AppResult<String> {
     let mut conn = state.connections.get(&connection_id).await?.conn().await?;
     schema::object_definition(&mut conn, &database, &name, kind).await
+}
+
+#[tauri::command]
+pub async fn database_diagram(
+    state: State<'_, AppState>,
+    connection_id: String,
+    database: String,
+) -> AppResult<Diagram> {
+    let mut conn = state.connections.get(&connection_id).await?.conn().await?;
+    read_diagram(&mut conn, &database).await
 }

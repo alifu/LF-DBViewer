@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod connection;
 pub mod data;
+pub mod files;
 pub mod profile;
 pub mod query;
 pub mod schema;

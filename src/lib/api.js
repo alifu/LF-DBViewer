@@ -21,10 +21,10 @@ export function toAppError(raw) {
  * function of the result, for calls whose log line is the SQL the backend ran.
  */
 export function createApi({ invoke, onLog, now = () => performance.now() }) {
-  return async function call(command, args = {}, { label = command, quiet = false } = {}) {
+  return async function call(command, args = {}, { label = command, quiet = false, headers = null } = {}) {
     const started = now();
     try {
-      const result = await invoke(command, args);
+      const result = await (headers === null ? invoke(command, args) : invoke(command, args, { headers }));
       const message = typeof label === "function" ? label(result) : label;
       if (!quiet) onLog({ level: "info", message, durationMs: now() - started });
       return result;

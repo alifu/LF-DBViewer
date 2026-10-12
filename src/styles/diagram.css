@@ -1,0 +1,34 @@
+.diagram { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 100%; min-width: 0; }
+.diagram-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.diagram-toolbar input[type="search"] { width: 170px; }
+.diagram-stage { position: relative; min-height: 0; background: var(--bg); background-image: radial-gradient(var(--border) 1px, transparent 1px); background-size: 24px 24px; overflow: hidden; }
+.diagram-svg { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; font: 12px -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; touch-action: none; }
+.diagram-svg:active { cursor: grabbing; }
+.diagram-info { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 6px 12px; border-top: 1px solid var(--border); min-height: 36px; }
+
+.diagram-body { fill: var(--surface); stroke: var(--border); stroke-width: 1; }
+.diagram-header { fill: var(--surface-2); stroke: var(--border); stroke-width: 1; cursor: move; }
+.diagram-title { fill: var(--text); font-weight: 600; font-size: 13px; pointer-events: none; }
+.diagram-box.external .diagram-body { stroke-dasharray: 5 3; }
+.diagram-box.external .diagram-title { font-style: italic; }
+.diagram-row-bg { fill: transparent; }
+.diagram-row:hover .diagram-row-bg { fill: var(--accent-subtle); }
+.diagram-row.drop-target .diagram-row-bg { fill: var(--accent-subtle); stroke: var(--accent); stroke-width: 1.5; }
+.diagram-column { fill: var(--text); pointer-events: none; }
+.diagram-column.required { font-weight: 500; }
+.diagram-type { fill: var(--muted); font-size: 11px; pointer-events: none; }
+.diagram-tag { font-size: 9px; font-weight: 700; pointer-events: none; }
+.diagram-tag.pk { fill: var(--changed); }
+.diagram-tag.fk { fill: var(--focus); }
+.diagram-port { fill: var(--surface); stroke: var(--accent); stroke-width: 1.5; opacity: 0; cursor: crosshair; }
+.diagram-row:hover .diagram-port, .diagram-box.selected .diagram-port { opacity: 1; }
+.diagram-box.selected .diagram-body, .diagram-box.selected .diagram-header { stroke: var(--accent); stroke-width: 2; }
+
+.diagram-edge { fill: none; stroke: var(--muted); stroke-width: 1.5; pointer-events: none; }
+.diagram-edge-hit { fill: none; stroke: transparent; stroke-width: 12; cursor: pointer; }
+.diagram-arrow { fill: var(--muted); }
+.diagram-start { fill: var(--muted); }
+.diagram-edge-group.related .diagram-edge { stroke: var(--accent); stroke-width: 2.5; }
+.diagram-draft { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 4; pointer-events: none; }
+.has-selection .diagram-box:not(.selected):not(.related) { opacity: 0.45; }
+.has-selection .diagram-edge-group:not(.related) { opacity: 0.3; }

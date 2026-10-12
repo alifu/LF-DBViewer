@@ -174,6 +174,7 @@ export function createStructureActions({ api, store, schema, admin }) {
         { label: "Refresh", onSelect: () => refreshTree(connectionId) },
         "-",
         { label: "Maintain tables…", onSelect: act("Maintain tables", () => admin.openMaintenance(connectionId, database)) },
+        { label: "Diagram…", onSelect: () => schema.openDiagram(connectionId, database) },
         { label: "Export database…", onSelect: () => schema.openTransfer(connectionId, database, "export") },
         { label: "Import SQL file…", onSelect: () => schema.openTransfer(connectionId, database, "import") },
         "-",
@@ -207,7 +208,14 @@ export function createStructureActions({ api, store, schema, admin }) {
     }
   }
 
+  /** Reads a table's definition, lets `mutate` change a copy, and runs the difference after review. */
+  async function editTable(connectionId, database, table, mutate, review = {}) {
+    const original = await api("table_definition", { connectionId, database, table }, { label: `Read structure of ${table}` });
+    return runChange(connectionId, { kind: "alterTable", database, original, edited: mutate(structuredClone(original)) }, review);
+  }
+
   return {
+    editTable,
     newDatabase: (connectionId) => guarded("New database", () => newDatabase(connectionId))(),
     showMenu: (event, target) => showMenu(event, menuItems(target)),
     designerData,

@@ -11,6 +11,7 @@ use crate::query::cell::value_text;
 use crate::sql::qualified;
 
 pub mod definition;
+pub mod diagram;
 pub mod routines;
 
 #[derive(Debug, Clone, Serialize)]
