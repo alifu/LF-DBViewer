@@ -1692,3 +1692,325 @@ mod transfer_tests {
         );
     }
 }
+
+// ---- server administration ----
+
+mod admin_tests {
+    use mysql_async::prelude::Queryable;
+    use mysql_async::{Conn, OptsBuilder};
+
+    use super::connect;
+    use crate::admin::change::AdminChange;
+    use crate::admin::grants::{GrantEntry, PrivilegeScope};
+    use crate::admin::maintenance::{MaintenanceOp, maintain};
+    use crate::admin::server;
+    use crate::admin::users::{list_users, show_grants};
+    use crate::ddl::apply::run_statements;
+
+    fn unique(prefix: &str) -> String {
+        format!(
+            "{prefix}_{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..12]
+        )
+    }
+
+    async fn apply(conn: &mut Conn, json: serde_json::Value) {
+        let change: AdminChange = serde_json::from_value(json).unwrap();
+        run_statements(conn, &change.statements(false).unwrap())
+            .await
+            .unwrap_or_else(|error| panic!("{error}\n{:?}", change.statements(true)));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a live MySQL/MariaDB server (LFDB_TEST_* variables)"]
+    async fn variables_status_engines_charsets_and_sizes_are_listed() {
+        let (manager, id) = connect().await;
+        let mut conn = manager.get(&id).await.unwrap().conn().await.unwrap();
+        let database = unique("lfdb_adm");
+        conn.query_drop(format!("CREATE DATABASE `{database}`"))
+            .await
+            .unwrap();
+        conn.query_drop(format!(
+            "CREATE TABLE `{database}`.`t` (id INT PRIMARY KEY, body TEXT) ENGINE=InnoDB"
+        ))
+        .await
+        .unwrap();
+        conn.query_drop(format!(
+            "INSERT INTO `{database}`.`t` VALUES (1, REPEAT('x', 1000)), (2, REPEAT('y', 1000))"
+        ))
+        .await
+        .unwrap();
+
+        let variables = server::variables(&mut conn).await.unwrap();
+        let status = server::status(&mut conn).await.unwrap();
+        let engines = server::engines(&mut conn).await.unwrap();
+        let charsets = server::charsets(&mut conn).await.unwrap();
+        let stats = server::database_stats(&mut conn).await.unwrap();
+        conn.query_drop(format!("DROP DATABASE `{database}`"))
+            .await
+            .unwrap();
+
+        assert!(
+            variables
+                .iter()
+                .any(|variable| variable.name == "max_connections"
+                    && variable.value.parse::<u64>().is_ok())
+        );
+        assert!(
+            status
+                .iter()
+                .any(|entry| entry.name == "Uptime" && entry.value.parse::<u64>().unwrap() > 0)
+        );
+        assert!(engines.iter().any(|engine| engine.name == "InnoDB"
+            && matches!(engine.support.as_str(), "DEFAULT" | "YES")));
+        assert!(
+            charsets
+                .iter()
+                .any(|charset| charset.name == "utf8mb4" && charset.max_length == 4)
+        );
+        let mine = stats
+            .iter()
+            .find(|entry| entry.name == database)
+            .expect("the new database is listed");
+        assert_eq!(mine.tables, 1);
+        assert!(mine.data_bytes > 0);
+        assert!(stats.iter().any(|entry| entry.name == "information_schema"));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a live MySQL/MariaDB server (LFDB_TEST_* variables)"]
+    async fn a_global_variable_can_be_changed_and_put_back() {
+        let (manager, id) = connect().await;
+        let mut conn = manager.get(&id).await.unwrap().conn().await.unwrap();
+        let read = |variables: Vec<server::NameValue>| {
+            variables
+                .into_iter()
+                .find(|variable| variable.name == "max_connections")
+                .unwrap()
+                .value
+        };
+        let original = read(server::variables(&mut conn).await.unwrap());
+        let changed = (original.parse::<u64>().unwrap() + 7).to_string();
+
+        apply(&mut conn, serde_json::json!({"kind": "setVariable", "name": "max_connections", "value": changed, "scope": "global"})).await;
+        let after = read(server::variables(&mut conn).await.unwrap());
+        apply(&mut conn, serde_json::json!({"kind": "setVariable", "name": "max_connections", "value": original, "scope": "global"})).await;
+        let restored = read(server::variables(&mut conn).await.unwrap());
+        let read_only = run_statements(
+            &mut conn,
+            &AdminChange::SetVariable {
+                name: "version".into(),
+                value: "x".into(),
+                scope: crate::admin::change::VariableScope::Global,
+            }
+            .statements(false)
+            .unwrap(),
+        )
+        .await;
+
+        assert_eq!(after, changed);
+        assert_eq!(restored, original);
+        assert!(
+            read_only.is_err(),
+            "a read-only variable must be refused by the server"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a live MySQL/MariaDB server (LFDB_TEST_* variables)"]
+    async fn running_statements_are_listed_and_a_connection_can_be_killed() {
+        let (manager, id) = connect().await;
+        let active = manager.get(&id).await.unwrap();
+        let mut conn = active.conn().await.unwrap();
+        let mut victim = active.open_session_conn().await.unwrap();
+        let victim_id = victim.id();
+
+        let listed = server::processes(&mut conn).await.unwrap();
+        server::kill(&mut conn, u64::from(victim_id), false)
+            .await
+            .unwrap();
+        let gone = victim.query_drop("SELECT 1").await;
+        let invalid = server::kill(&mut conn, 0, true).await;
+
+        assert!(
+            listed
+                .iter()
+                .any(|process| process.id == u64::from(victim_id))
+        );
+        assert!(listed.iter().any(|process| {
+            process.command == "Query"
+                && process
+                    .info
+                    .as_deref()
+                    .is_some_and(|info| info.contains("PROCESSLIST"))
+        }));
+        assert!(gone.is_err(), "a killed connection cannot run anything");
+        assert!(invalid.is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a live MySQL/MariaDB server (LFDB_TEST_* variables)"]
+    async fn accounts_and_privileges_are_created_enforced_changed_and_removed() {
+        let (manager, id) = connect().await;
+        let active = manager.get(&id).await.unwrap();
+        let mut conn = active.conn().await.unwrap();
+        let database = unique("lfdb_priv");
+        let user = unique("lfdb_user");
+        conn.query_drop(format!("CREATE DATABASE `{database}`"))
+            .await
+            .unwrap();
+        conn.query_drop(format!(
+            "CREATE TABLE `{database}`.`t` (id INT PRIMARY KEY)"
+        ))
+        .await
+        .unwrap();
+        conn.query_drop(format!("INSERT INTO `{database}`.`t` VALUES (1)"))
+            .await
+            .unwrap();
+        let on_database = serde_json::json!({"kind": "database", "database": database});
+
+        apply(&mut conn, serde_json::json!({"kind": "createUser", "user": user, "host": "%", "password": "p@ss'word"})).await;
+        apply(&mut conn, serde_json::json!({"kind": "grant", "user": user, "host": "%", "scope": on_database, "privileges": ["select", "insert"]})).await;
+        let listed = list_users(&mut conn).await.unwrap();
+        let grants = show_grants(&mut conn, &user, "%").await.unwrap();
+
+        // Log in as the new account: the password works, SELECT and INSERT are allowed, DELETE is not.
+        let as_user = |password: &str| {
+            OptsBuilder::from_opts(active_opts(&active))
+                .user(Some(user.as_str()))
+                .pass(Some(password))
+                .db_name(Some(database.as_str()))
+        };
+        let mut limited = Conn::new(as_user("p@ss'word"))
+            .await
+            .expect("the new account can log in");
+        let selected: Option<u64> = limited.query_first("SELECT COUNT(*) FROM t").await.unwrap();
+        let inserted = limited.query_drop("INSERT INTO t VALUES (2)").await;
+        let deleted = limited.query_drop("DELETE FROM t WHERE id = 2").await;
+        let wrong = Conn::new(as_user("not the password")).await;
+
+        apply(&mut conn, serde_json::json!({"kind": "revoke", "user": user, "host": "%", "scope": on_database, "privileges": ["INSERT"]})).await;
+        apply(&mut conn, serde_json::json!({"kind": "grant", "user": user, "host": "%", "scope": {"kind": "table", "database": database, "table": "t"}, "privileges": ["DELETE"], "grantOption": false})).await;
+        let after = show_grants(&mut conn, &user, "%").await.unwrap();
+        apply(&mut conn, serde_json::json!({"kind": "setPassword", "user": user, "host": "%", "password": "changed"})).await;
+        let relogin = Conn::new(as_user("changed")).await;
+        apply(
+            &mut conn,
+            serde_json::json!({"kind": "dropUser", "user": user, "host": "%"}),
+        )
+        .await;
+        let remaining = list_users(&mut conn).await.unwrap();
+        conn.query_drop(format!("DROP DATABASE `{database}`"))
+            .await
+            .unwrap();
+
+        assert!(
+            listed
+                .iter()
+                .any(|account| account.user == user && account.host == "%")
+        );
+        let database_grant = grants.iter().find_map(|entry| match entry {
+            GrantEntry::Privileges {
+                scope: PrivilegeScope::Database { database: name },
+                privileges,
+                ..
+            } if *name == database => Some(privileges.clone()),
+            _ => None,
+        });
+        let mut granted = database_grant.expect("a database-level grant is listed");
+        granted.sort();
+        assert_eq!(granted, ["INSERT", "SELECT"]);
+        assert_eq!(selected, Some(1));
+        assert!(inserted.is_ok());
+        assert!(deleted.is_err(), "DELETE was never granted");
+        assert!(wrong.is_err());
+        let names_after: Vec<String> = after
+            .iter()
+            .filter_map(|entry| match entry {
+                GrantEntry::Privileges {
+                    scope, privileges, ..
+                } => Some(format!("{}:{}", scope.target_sql(), privileges.join(","))),
+                GrantEntry::Raw { .. } => None,
+            })
+            .collect();
+        assert!(
+            names_after.iter().any(|text| text.ends_with(".*:SELECT")),
+            "{names_after:?}"
+        );
+        assert!(
+            names_after.iter().any(|text| text.ends_with("`t`:DELETE")),
+            "{names_after:?}"
+        );
+        assert!(relogin.is_ok());
+        assert!(remaining.iter().all(|account| account.user != user));
+    }
+
+    fn active_opts(active: &crate::connection::manager::ActiveConnection) -> mysql_async::Opts {
+        active.driver_options()
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a live MySQL/MariaDB server (LFDB_TEST_* variables)"]
+    async fn tables_can_be_analysed_checked_optimised_and_checksummed() {
+        let (manager, id) = connect().await;
+        let mut conn = manager.get(&id).await.unwrap().conn().await.unwrap();
+        let database = unique("lfdb_maint");
+        conn.query_drop(format!("CREATE DATABASE `{database}`"))
+            .await
+            .unwrap();
+        conn.query_drop(format!(
+            "CREATE TABLE `{database}`.`a` (id INT PRIMARY KEY)"
+        ))
+        .await
+        .unwrap();
+        conn.query_drop(format!(
+            "CREATE TABLE `{database}`.`b` (id INT PRIMARY KEY)"
+        ))
+        .await
+        .unwrap();
+        let tables = vec!["a".to_owned(), "b".to_owned()];
+
+        let analyse = maintain(&mut conn, MaintenanceOp::Analyze, &database, &tables)
+            .await
+            .unwrap();
+        let check = maintain(&mut conn, MaintenanceOp::Check, &database, &tables)
+            .await
+            .unwrap();
+        let optimise = maintain(&mut conn, MaintenanceOp::Optimize, &database, &tables[..1])
+            .await
+            .unwrap();
+        let checksum = maintain(&mut conn, MaintenanceOp::Checksum, &database, &tables)
+            .await
+            .unwrap();
+        let missing = maintain(
+            &mut conn,
+            MaintenanceOp::Check,
+            &database,
+            &["nope".to_owned()],
+        )
+        .await
+        .unwrap();
+        conn.query_drop(format!("DROP DATABASE `{database}`"))
+            .await
+            .unwrap();
+
+        assert!(
+            analyse.iter().any(|row| row.table.ends_with(".a")
+                && row.kind == "status"
+                && row.message.eq_ignore_ascii_case("OK")),
+            "{analyse:?}"
+        );
+        assert_eq!(
+            check
+                .iter()
+                .filter(|row| row.kind == "status" && row.message.eq_ignore_ascii_case("OK"))
+                .count(),
+            2,
+            "{check:?}"
+        );
+        assert!(!optimise.is_empty());
+        assert_eq!(checksum.len(), 2);
+        assert!(checksum.iter().all(|row| row.kind == "checksum"));
+        assert!(missing.iter().any(|row| row.kind == "error"), "{missing:?}");
+    }
+}

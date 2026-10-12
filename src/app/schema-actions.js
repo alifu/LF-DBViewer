@@ -47,6 +47,8 @@ export function createSchemaActions({ api, store }) {
       const name = `Query ${Math.max(0, ...used) + 1}`;
       store.update((current) => transitions.openTab(current, { connectionId, database, name, kind: "query", ...extra }));
     },
+    /** The server tab: one per connection. */
+    openServer: (connectionId) => store.update((state) => transitions.openTab(state, { connectionId, database: "", name: "Server", kind: "admin" })),
     /** An export or import tab; `extra` can carry `tables` to export only those. */
     openTransfer(connectionId, database, kind, extra = {}) {
       const name = kind === "import" ? `Import into ${database}` : `Export ${extra.tables?.length === 1 ? extra.tables[0] : database}`;

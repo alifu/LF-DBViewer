@@ -12,7 +12,7 @@ const TABS_OF_KIND = { table: ["table", "structure"], view: ["view", "viewdef"] 
 const NEW_GROUP_KINDS = { tables: "table", views: "view", procedures: "procedure", functions: "function", triggers: "trigger", events: "event" };
 
 /** Everything that changes a database's structure: dialogs, previews, confirmations and the follow-up refresh. */
-export function createStructureActions({ api, store, schema }) {
+export function createStructureActions({ api, store, schema, admin }) {
   const serverOptions = (connectionId) => api("server_options", { connectionId }, { quiet: true });
   const sqlLabel = (result) => result.statements.join(";\n");
 
@@ -173,6 +173,7 @@ export function createStructureActions({ api, store, schema }) {
         { label: "New query here", onSelect: () => schema.newQuery(connectionId, database) },
         { label: "Refresh", onSelect: () => refreshTree(connectionId) },
         "-",
+        { label: "Maintain tables…", onSelect: act("Maintain tables", () => admin.openMaintenance(connectionId, database)) },
         { label: "Export database…", onSelect: () => schema.openTransfer(connectionId, database, "export") },
         { label: "Import SQL file…", onSelect: () => schema.openTransfer(connectionId, database, "import") },
         "-",
@@ -190,6 +191,7 @@ export function createStructureActions({ api, store, schema }) {
         return [
           { label: "Open data", onSelect: open("table") },
           { label: "Structure…", onSelect: open("structure") },
+          { label: "Maintenance…", onSelect: act("Maintain table", () => admin.openMaintenance(connectionId, database, [name])) },
           { label: "Export table…", onSelect: () => schema.openTransfer(connectionId, database, "export", { tables: [name] }) },
           "-",
           { label: "Truncate…", danger: true, onSelect: act("Truncate table", () => truncateTable(connectionId, database, name)) },

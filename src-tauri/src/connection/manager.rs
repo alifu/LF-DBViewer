@@ -38,6 +38,12 @@ impl ActiveConnection {
         self.info.engine
     }
 
+    /// The connection options, for tests that log in as another account.
+    #[cfg(test)]
+    pub fn driver_options(&self) -> Opts {
+        self.opts.clone()
+    }
+
     /// A connection of its own, outside the pool, for a query tab's session.
     pub async fn open_session_conn(&self) -> AppResult<Conn> {
         let connect = async { Ok(Conn::new(self.opts.clone()).await?) };

@@ -33,7 +33,7 @@ function connectionTab(connection, activeId, actions) {
   );
 }
 
-const TAB_HINTS = { structure: "structure", viewdef: "definition", newtable: "new", query: null, export: null, import: null };
+const TAB_HINTS = { structure: "structure", viewdef: "definition", newtable: "new", query: null, export: null, import: null, admin: null };
 const hintOf = (tab) => (tab.kind in TAB_HINTS ? TAB_HINTS[tab.kind] : tab.database);
 
 function objectTab(tab, activeTabId, actions) {
@@ -75,6 +75,7 @@ export function createWorkspace({ actions, logPanel, createTabView }) {
       h("span", { class: "spacer" }),
       status,
       reload,
+      h("button", { type: "button", class: "ghost", title: "Variables, status, processes, users and more", onClick: () => activeId && actions.openServer(activeId) }, "Server"),
       h("button", { type: "button", class: "ghost", title: "Settings (⌘,)", onClick: () => actions.openSettings() }, "Settings"),
     ),
     h("div", { class: "workspace-body" }, h("aside", { class: "sidebar" }, tree.element), h("section", { class: "content" }, objectTabs, host)),

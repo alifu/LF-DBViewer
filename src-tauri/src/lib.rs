@@ -1,3 +1,4 @@
+mod admin;
 mod commands;
 mod connection;
 mod ddl;
@@ -16,9 +17,9 @@ mod transfer;
 use tauri::Manager;
 
 use commands::{
-    connection as connection_commands, data as data_commands, profile as profile_commands,
-    query as query_commands, schema as schema_commands, structure as structure_commands,
-    transfer as transfer_commands,
+    admin as admin_commands, connection as connection_commands, data as data_commands,
+    profile as profile_commands, query as query_commands, schema as schema_commands,
+    structure as structure_commands, transfer as transfer_commands,
 };
 use state::AppState;
 
@@ -63,6 +64,18 @@ pub fn run() {
             transfer_commands::export_database,
             transfer_commands::import_sql_file,
             transfer_commands::cancel_transfer,
+            admin_commands::list_server_variables,
+            admin_commands::list_server_status,
+            admin_commands::list_processes,
+            admin_commands::kill_process,
+            admin_commands::list_engines,
+            admin_commands::list_charsets,
+            admin_commands::list_database_stats,
+            admin_commands::list_users,
+            admin_commands::show_user_grants,
+            admin_commands::preview_admin_change,
+            admin_commands::apply_admin_change,
+            admin_commands::maintain_tables,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

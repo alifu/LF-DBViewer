@@ -1,7 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import { createAdminActions } from "./app/admin-actions.js";
 import { createConnectionActions } from "./app/connection-actions.js";
 import { createSchemaActions } from "./app/schema-actions.js";
+import { createAdminView } from "./features/admin/admin-view.js";
 import { createDashboard } from "./features/dashboard/dashboard.js";
 import { createLogPanel } from "./features/log/log-panel.js";
 import { createQueryActions } from "./app/query-actions.js";
@@ -38,7 +40,8 @@ const store = createStore(transitions.initialState);
 const log = (entry) => store.update((state) => transitions.appendLog(state, { ...entry, time: new Date() }));
 const api = createApi({ invoke, onLog: log });
 const schema = createSchemaActions({ api, store });
-const structure = createStructureActions({ api, store, schema });
+const admin = createAdminActions({ api, store });
+const structure = createStructureActions({ api, store, schema, admin });
 const transfer = createTransferActions({ api, store, schema });
 
 /** A new connection shows its databases, with the profile's default database already open. */
@@ -106,6 +109,7 @@ function createTabView(tab) {
     });
   }
   if (DATA_KINDS.includes(tab.kind)) return createTableView({ tab, data: schema.tableData(tab) });
+  if (tab.kind === "admin") return createAdminView({ data: admin.forConnection(tab.connectionId), onMaintain: (database) => void admin.openMaintenance(tab.connectionId, database) });
   if (tab.kind === "export") return createExportView({ tab, data: transfer.exportData(tab) });
   if (tab.kind === "import") return createImportView({ tab, data: transfer.importData(tab) });
   if (DESIGNER_KINDS.includes(tab.kind)) return createDesignerView({ tab, data: structure.designerData(tab) });
