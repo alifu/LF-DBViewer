@@ -1,13 +1,17 @@
 //! Runs a SQL file against a database, reading it in pieces so its size does not matter.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
+use async_compression::tokio::bufread::GzipDecoder;
 use mysql_async::Conn;
 use mysql_async::prelude::Queryable;
 use serde::{Deserialize, Serialize};
 use tokio::fs::File;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, BufReader};
 
 use crate::error::{AppError, AppResult};
 use crate::sql::quote_identifier;
@@ -80,6 +84,35 @@ pub struct ImportSummary {
 }
 
 pub type Emit<'a> = &'a (dyn Fn(ImportEvent) + Send + Sync);
+
+/// The first two bytes of a gzip file.
+const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
+
+pub fn is_gzip(start: &[u8]) -> bool {
+    start.starts_with(&GZIP_MAGIC)
+}
+
+/// Counts the bytes read from the file itself, so progress is right for a compressed file too.
+struct CountingReader<R> {
+    inner: R,
+    count: Arc<AtomicU64>,
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for CountingReader<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let before = buffer.filled().len();
+        let poll = Pin::new(&mut self.inner).poll_read(context, buffer);
+        if let Poll::Ready(Ok(())) = &poll {
+            self.count
+                .fetch_add((buffer.filled().len() - before) as u64, Ordering::Relaxed);
+        }
+        poll
+    }
+}
 
 fn preview(sql: &str) -> String {
     match sql.char_indices().nth(SQL_PREVIEW_CHARS) {
@@ -211,13 +244,28 @@ pub async fn import_file(
     };
     let (mut stream, mut decoder) = (StatementStream::default(), Utf8Decoder::default());
     let mut buffer = vec![0u8; READ_CHUNK_BYTES];
+    let mut magic = [0u8; 2];
+    let compressed = file.read(&mut magic).await? == 2 && is_gzip(&magic);
+    file.seek(std::io::SeekFrom::Start(0)).await?;
+    let position = Arc::new(AtomicU64::new(0));
+    let counted = BufReader::new(CountingReader {
+        inner: file,
+        count: Arc::clone(&position),
+    });
+    let mut reader: Pin<Box<dyn AsyncRead + Send>> = if compressed {
+        let mut decoder = GzipDecoder::new(counted);
+        decoder.multiple_members(true);
+        Box::pin(decoder)
+    } else {
+        Box::pin(counted)
+    };
 
     while !run.stopped() {
-        let read = file.read(&mut buffer).await?;
+        let read = reader.read(&mut buffer).await?;
+        run.bytes_read = position.load(Ordering::Relaxed);
         if read == 0 {
             break;
         }
-        run.bytes_read += read as u64;
         let pending = stream.push(&decoder.push(&buffer[..read]));
         run.execute(conn, pending).await;
         run.report(false);
@@ -263,5 +311,31 @@ mod tests {
             request.stop_on_error && request.disable_foreign_key_checks && request.create_database
         );
         assert_eq!(request.database, None);
+    }
+
+    #[tokio::test]
+    async fn gzip_files_are_recognised_decoded_and_counted_by_their_compressed_size() {
+        use async_compression::tokio::write::GzipEncoder;
+        use tokio::io::AsyncWriteExt;
+
+        let text = "INSERT INTO t VALUES (1);\n".repeat(500);
+        let mut encoder = GzipEncoder::new(Vec::new());
+        encoder.write_all(text.as_bytes()).await.unwrap();
+        encoder.shutdown().await.unwrap();
+        let compressed = encoder.into_inner();
+
+        let count = Arc::new(AtomicU64::new(0));
+        let source = BufReader::new(CountingReader {
+            inner: std::io::Cursor::new(compressed.clone()),
+            count: Arc::clone(&count),
+        });
+        let mut decoder = GzipDecoder::new(source);
+        let mut decoded = String::new();
+        decoder.read_to_string(&mut decoded).await.unwrap();
+
+        assert!(is_gzip(&compressed) && !is_gzip(b"IN") && !is_gzip(b""));
+        assert_eq!(decoded, text);
+        assert_eq!(count.load(Ordering::Relaxed), compressed.len() as u64);
+        assert!(compressed.len() < text.len() / 10);
     }
 }

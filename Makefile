@@ -13,7 +13,7 @@ test:
 
 # Also runs the tests that need a real server. Override LFDB_TEST_* to point elsewhere.
 test-live:
-	cd src-tauri && LFDB_TEST_HOST=$${LFDB_TEST_HOST:-127.0.0.1} LFDB_TEST_USER=$${LFDB_TEST_USER:-root} cargo test -- --include-ignored
+	cd src-tauri && LFDB_TEST_HOST=$${LFDB_TEST_HOST:-127.0.0.1} LFDB_TEST_USER=$${LFDB_TEST_USER:-root} cargo test -- --include-ignored --skip ssh_tests
 
 # A throwaway MariaDB for the live tests (needs Docker): `make mariadb-up test-live-mariadb mariadb-down`.
 MARIADB_PORT ?= 33308
@@ -25,7 +25,7 @@ mariadb-down:
 	docker rm -f lfdb-mariadb
 
 test-live-mariadb:
-	cd src-tauri && LFDB_TEST_HOST=127.0.0.1 LFDB_TEST_PORT=$(MARIADB_PORT) LFDB_TEST_USER=root cargo test -- --include-ignored
+	cd src-tauri && LFDB_TEST_HOST=127.0.0.1 LFDB_TEST_PORT=$(MARIADB_PORT) LFDB_TEST_USER=root cargo test -- --include-ignored --skip ssh_tests
 
 # Real SSH tunnel tests against an OpenSSH server in Docker (agent sign-in included). Needs Docker.
 test-ssh:

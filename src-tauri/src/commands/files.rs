@@ -5,7 +5,10 @@ use tauri::ipc::{InvokeBody, Request};
 use crate::error::{AppError, AppResult};
 
 /// Only these kinds of file can be written from the interface: pictures made by the diagram export.
-const ALLOWED_EXTENSIONS: [&str; 2] = ["svg", "png"];
+const ALLOWED_EXTENSIONS: [&str; 6] = ["svg", "png", "sql", "txt", "csv", "json"];
+/// Text files that can be opened into the query editor.
+const READABLE_EXTENSIONS: [&str; 3] = ["sql", "txt", "ddl"];
+const MAX_TEXT_FILE_BYTES: u64 = 20 * 1024 * 1024;
 const PATH_HEADER: &str = "path";
 
 /// Decodes `%XX` escapes (UTF-8) as used in a URL; a header cannot carry arbitrary text otherwise.
@@ -50,6 +53,35 @@ pub fn checked_export_path(raw: &str) -> AppResult<PathBuf> {
         return Err(AppError::Validation("The folder does not exist".into()));
     }
     Ok(path)
+}
+
+/// Reads a SQL or text file into the editor. Large files are refused rather than slowing the editor to a crawl.
+#[tauri::command]
+pub async fn read_text_file(path: String) -> AppResult<String> {
+    let location = PathBuf::from(&path);
+    let extension = location
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+    if !location.is_absolute()
+        || !extension.is_some_and(|extension| READABLE_EXTENSIONS.contains(&extension.as_str()))
+    {
+        return Err(AppError::Validation("Choose a .sql or .txt file".into()));
+    }
+    let size = tokio::fs::metadata(&location)
+        .await
+        .map_err(|error| AppError::Validation(format!("Cannot open {path}: {error}")))?
+        .len();
+    if size > MAX_TEXT_FILE_BYTES {
+        return Err(AppError::Validation(format!(
+            "The file is {} MB. Use Import to run files larger than 20 MB.",
+            size / (1024 * 1024)
+        )));
+    }
+    let bytes = tokio::fs::read(&location).await?;
+    Ok(String::from_utf8_lossy(&bytes)
+        .trim_start_matches('\u{feff}')
+        .to_owned())
 }
 
 /// Writes the bytes sent as the request body to the file named in the `path` header (percent-encoded).

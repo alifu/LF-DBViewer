@@ -2628,3 +2628,340 @@ mod cell_tests {
         assert_eq!((all, filtered), (3, 2));
     }
 }
+
+// ---- gzip dumps, CSV import and result export ----
+
+mod file_transfer_tests {
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicBool;
+
+    use mysql_async::prelude::Queryable;
+    use mysql_async::{Conn, Row};
+
+    use super::connect;
+    use crate::schema::texts;
+    use crate::transfer::csv_import::{CsvImportRequest, import_csv};
+    use crate::transfer::export::{ExportRequest, export_database};
+    use crate::transfer::import::{ImportRequest, import_file};
+    use crate::transfer::result_export::{ResultExportRequest, export_result};
+
+    fn unique(prefix: &str) -> String {
+        format!(
+            "{prefix}_{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..12]
+        )
+    }
+
+    fn temp_file(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("{}_{name}", unique("lfdb")))
+    }
+
+    async fn run(conn: &mut Conn, sql: &str) {
+        conn.query_drop(sql)
+            .await
+            .unwrap_or_else(|error| panic!("{error}\n{sql}"));
+    }
+
+    async fn checksum(conn: &mut Conn, database: &str, table: &str) -> String {
+        let rows: Vec<Row> = conn
+            .query(format!("CHECKSUM TABLE `{database}`.`{table}`"))
+            .await
+            .unwrap();
+        texts(rows.into_iter().next().unwrap())[1].clone().unwrap()
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a live MySQL/MariaDB server (LFDB_TEST_* variables)"]
+    async fn a_gzip_dump_is_smaller_and_loads_back_identical() {
+        let (manager, id) = connect().await;
+        let active = manager.get(&id).await.unwrap();
+        let mut conn = active.open_session_conn().await.unwrap();
+        let database = unique("lfdb_gz");
+        run(&mut conn, &format!("CREATE DATABASE `{database}`")).await;
+        run(&mut conn, &format!("USE `{database}`")).await;
+        run(
+            &mut conn,
+            "CREATE TABLE t (id INT PRIMARY KEY, body TEXT) ENGINE=InnoDB",
+        )
+        .await;
+        let values: Vec<String> = (1..=800)
+            .map(|id| format!("({id}, REPEAT('compressible text {id} ', 12))"))
+            .collect();
+        run(
+            &mut conn,
+            &format!("INSERT INTO t VALUES {}", values.join(",")),
+        )
+        .await;
+        let before = checksum(&mut conn, &database, "t").await;
+        let (plain, packed) = (temp_file("dump.sql"), temp_file("dump.sql.gz"));
+        let request = |path: &PathBuf| -> ExportRequest {
+            serde_json::from_value(serde_json::json!({ "jobId": unique("job"), "database": database, "path": path, "tables": ["t"], "createDatabase": true, "maxStatementBytes": 4000 })).unwrap()
+        };
+
+        let plain_summary = export_database(
+            &mut conn,
+            &request(&plain),
+            &AtomicBool::new(false),
+            &|_| {},
+        )
+        .await
+        .unwrap();
+        let packed_summary = export_database(
+            &mut conn,
+            &request(&packed),
+            &AtomicBool::new(false),
+            &|_| {},
+        )
+        .await
+        .unwrap();
+        let magic = std::fs::read(&packed).unwrap();
+        run(&mut conn, &format!("DROP DATABASE `{database}`")).await;
+        let mut loader = active.open_session_conn().await.unwrap();
+        let import_request: ImportRequest =
+            serde_json::from_value(serde_json::json!({ "jobId": unique("job"), "path": packed }))
+                .unwrap();
+        let imported = import_file(
+            &mut loader,
+            &import_request,
+            &AtomicBool::new(false),
+            &|_| {},
+        )
+        .await
+        .unwrap();
+        let after = checksum(&mut conn, &database, "t").await;
+        run(&mut conn, &format!("DROP DATABASE `{database}`")).await;
+        let _ = (std::fs::remove_file(&plain), std::fs::remove_file(&packed));
+
+        assert_eq!(&magic[..2], &[0x1f, 0x8b], "the file really is gzip");
+        assert!(
+            packed_summary.bytes * 5 < plain_summary.bytes,
+            "{} compressed vs {} plain",
+            packed_summary.bytes,
+            plain_summary.bytes
+        );
+        assert!(imported.errors.is_empty(), "{:?}", imported.errors);
+        assert_eq!(before, after);
+        assert_eq!(
+            imported.bytes, packed_summary.bytes,
+            "progress counts the compressed bytes that were read"
+        );
+    }
+
+    fn csv_request(path: &PathBuf, database: &str, mapping: serde_json::Value) -> CsvImportRequest {
+        serde_json::from_value(serde_json::json!({
+            "jobId": unique("job"), "path": path, "database": database, "table": "people", "delimiter": ",", "hasHeader": true,
+            "mapping": mapping, "nullText": "NULL", "emptyAsNull": true
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a live MySQL/MariaDB server (LFDB_TEST_* variables)"]
+    async fn csv_rows_load_with_mapping_nulls_and_awkward_text_and_a_bad_row_changes_nothing() {
+        let (manager, id) = connect().await;
+        let active = manager.get(&id).await.unwrap();
+        let mut conn = active.open_session_conn().await.unwrap();
+        let database = unique("lfdb_csv");
+        run(&mut conn, &format!("CREATE DATABASE `{database}`")).await;
+        run(&mut conn, &format!("CREATE TABLE `{database}`.`people` (id INT PRIMARY KEY, name VARCHAR(60), age INT NULL, note TEXT NULL, extra INT NULL DEFAULT 5)")).await;
+        let good = temp_file("good.csv");
+        std::fs::write(&good, "\u{feff}id,name,skip,age,note\n1,\"Ann, \"\"the boss\"\"\",x,34,\"two\nlines\"\n2,Zoë 日本,x,NULL,\n3,Bob,x,,plain\n").unwrap();
+        let bad = temp_file("bad.csv");
+        let mut bad_text = String::from("id,name,skip,age,note\n");
+        for number in 10..2010 {
+            bad_text.push_str(&format!("{number},row {number},x,{number},fine\n"));
+        }
+        bad_text.push_str("2010,broken,x,not a number,oops\n2011,after,x,1,ok\n");
+        std::fs::write(&bad, &bad_text).unwrap();
+        let mapping = serde_json::json!(["id", "name", null, "age", "note"]);
+
+        let loaded = import_csv(
+            &mut conn,
+            &csv_request(&good, &database, mapping.clone()),
+            &AtomicBool::new(false),
+            &|_| {},
+        )
+        .await
+        .unwrap();
+        let rows: Vec<Row> = conn
+            .query(format!(
+                "SELECT id, name, age, note, extra FROM `{database}`.`people` ORDER BY id"
+            ))
+            .await
+            .unwrap();
+        let rows: Vec<Vec<Option<String>>> = rows.into_iter().map(texts).collect();
+        let refused = import_csv(
+            &mut conn,
+            &csv_request(&bad, &database, mapping.clone()),
+            &AtomicBool::new(false),
+            &|_| {},
+        )
+        .await;
+        let after_refusal: Option<u64> = conn
+            .query_first(format!("SELECT COUNT(*) FROM `{database}`.`people`"))
+            .await
+            .unwrap();
+        let mut replace = csv_request(&good, &database, mapping.clone());
+        replace.truncate_first = true;
+        let replaced = import_csv(&mut conn, &replace, &AtomicBool::new(false), &|_| {})
+            .await
+            .unwrap();
+        let total_after_replace: Option<u64> = conn
+            .query_first(format!("SELECT COUNT(*) FROM `{database}`.`people`"))
+            .await
+            .unwrap();
+        let wrong_column = import_csv(
+            &mut conn,
+            &csv_request(&good, &database, serde_json::json!(["id", "nope"])),
+            &AtomicBool::new(false),
+            &|_| {},
+        )
+        .await;
+        run(&mut conn, &format!("DROP DATABASE `{database}`")).await;
+        let _ = (std::fs::remove_file(&good), std::fs::remove_file(&bad));
+
+        assert_eq!(loaded.rows, 3);
+        assert_eq!(
+            rows[0],
+            [
+                Some("1".into()),
+                Some("Ann, \"the boss\"".into()),
+                Some("34".into()),
+                Some("two\nlines".into()),
+                Some("5".into())
+            ]
+        );
+        assert_eq!(rows[1][1].as_deref(), Some("Zoë 日本"));
+        assert_eq!(rows[1][2], None, "NULL text became NULL");
+        assert_eq!(rows[1][3], None, "an empty field became NULL");
+        assert_eq!(rows[2][2], None);
+        let message = refused.unwrap_err().to_string();
+        assert!(message.contains("Row 2001"), "{message}");
+        assert_eq!(
+            after_refusal,
+            Some(3),
+            "the 2000 good rows before the bad one were rolled back too"
+        );
+        assert_eq!(replaced.rows, 3);
+        assert_eq!(
+            total_after_replace,
+            Some(3),
+            "truncate first replaced the rows instead of adding to them"
+        );
+        assert!(wrong_column.is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a live MySQL/MariaDB server (LFDB_TEST_* variables)"]
+    async fn a_result_is_exported_in_full_as_csv_and_json_with_no_display_limits() {
+        let (manager, id) = connect().await;
+        let active = manager.get(&id).await.unwrap();
+        let mut conn = active.open_session_conn().await.unwrap();
+        let database = unique("lfdb_res");
+        run(&mut conn, &format!("CREATE DATABASE `{database}`")).await;
+        run(&mut conn, &format!("CREATE TABLE `{database}`.`t` (id INT PRIMARY KEY, body LONGTEXT, price DECIMAL(20,4), raw VARBINARY(8), seen DATETIME NULL)")).await;
+        run(&mut conn, &format!("INSERT INTO `{database}`.`t` VALUES (1, REPEAT('long ', 2000), 12345678901234.5678, 0xCAFE, '2026-01-31 10:00:00'), (2, 'say \"hi\", ok', 0.5000, NULL, NULL)")).await;
+        let (csv, json) = (temp_file("out.csv"), temp_file("out.json"));
+        let make = |path: &PathBuf, format: &str| -> ResultExportRequest {
+            serde_json::from_value(serde_json::json!({ "jobId": unique("job"), "sql": "SELECT * FROM t ORDER BY id", "database": database, "path": path, "format": format, "nullText": "NULL", "byteOrderMark": true })).unwrap()
+        };
+
+        let csv_summary = export_result(
+            &mut conn,
+            &make(&csv, "csv"),
+            &AtomicBool::new(false),
+            &|_| {},
+        )
+        .await
+        .unwrap();
+        let json_summary = export_result(
+            &mut conn,
+            &make(&json, "json"),
+            &AtomicBool::new(false),
+            &|_| {},
+        )
+        .await
+        .unwrap();
+        let no_rows = export_result(
+            &mut conn,
+            &ResultExportRequest {
+                sql: "SET @x = 1".into(),
+                path: temp_file("none.csv").display().to_string(),
+                ..make(&csv, "csv")
+            },
+            &AtomicBool::new(false),
+            &|_| {},
+        )
+        .await;
+        let cancel = AtomicBool::new(true);
+        let cancelled_path = temp_file("cancelled.csv");
+        let many = ExportCancelProbe::run(&mut conn, &database, &cancelled_path, &cancel).await;
+        let csv_text = std::fs::read_to_string(&csv).unwrap();
+        let json_text = std::fs::read_to_string(&json).unwrap();
+        run(&mut conn, &format!("DROP DATABASE `{database}`")).await;
+        let _ = (std::fs::remove_file(&csv), std::fs::remove_file(&json));
+
+        assert_eq!((csv_summary.rows, json_summary.rows), (2, 2));
+        assert!(csv_text.starts_with('\u{feff}'));
+        let records: Vec<csv::StringRecord> =
+            csv::Reader::from_reader(csv_text.trim_start_matches('\u{feff}').as_bytes())
+                .records()
+                .map(Result::unwrap)
+                .collect();
+        assert_eq!(
+            records[0].get(1).unwrap().len(),
+            10_000,
+            "a long text is not cut"
+        );
+        assert_eq!(
+            (records[0].get(2), records[0].get(3), records[0].get(4)),
+            (
+                Some("12345678901234.5678"),
+                Some("0xcafe"),
+                Some("2026-01-31 10:00:00")
+            )
+        );
+        assert_eq!(
+            (records[1].get(1), records[1].get(3), records[1].get(4)),
+            (Some("say \"hi\", ok"), Some("NULL"), Some("NULL"))
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&json_text).unwrap();
+        assert_eq!(parsed[0]["id"], 1);
+        assert_eq!(parsed[0]["price"], "12345678901234.5678");
+        assert_eq!(parsed[1]["raw"], serde_json::Value::Null);
+        assert_eq!(parsed[0]["body"].as_str().unwrap().len(), 10_000);
+        assert!(no_rows.is_err());
+        assert!(many.cancelled && !cancelled_path.exists());
+    }
+
+    /// Exports enough rows that a raised cancel flag is noticed.
+    struct ExportCancelProbe;
+
+    impl ExportCancelProbe {
+        async fn run(
+            conn: &mut Conn,
+            database: &str,
+            path: &PathBuf,
+            cancel: &AtomicBool,
+        ) -> crate::transfer::result_export::ResultExportSummary {
+            run(
+                conn,
+                &format!("CREATE TABLE `{database}`.`many` (n INT PRIMARY KEY)"),
+            )
+            .await;
+            let values: Vec<String> = (1..=3000).map(|n| format!("({n})")).collect();
+            run(
+                conn,
+                &format!(
+                    "INSERT INTO `{database}`.`many` VALUES {}",
+                    values.join(",")
+                ),
+            )
+            .await;
+            let request: ResultExportRequest = serde_json::from_value(serde_json::json!({ "jobId": unique("job"), "sql": "SELECT * FROM many", "database": database, "path": path, "format": "csv" })).unwrap();
+            export_result(conn, &request, cancel, &|_| {})
+                .await
+                .unwrap()
+        }
+    }
+}

@@ -4,11 +4,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use async_compression::tokio::write::GzipEncoder;
 use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, Row};
 use serde::{Deserialize, Serialize};
 use tokio::fs::File;
-use tokio::io::{AsyncWriteExt, BufWriter};
+use tokio::io::{AsyncWrite, AsyncWriteExt, BufWriter};
 
 use super::text::{DEFAULT_STATEMENT_BYTES, FOOTER, InsertBatcher, header, section, strip_definer};
 use super::value::{DumpColumn, row_literal};
@@ -105,9 +106,15 @@ pub struct ExportSummary {
 
 pub type Emit<'a> = &'a (dyn Fn(ExportEvent) + Send + Sync);
 
+/// Where the text goes: the file, compressed on the way when its name ends in `.gz`.
 struct Output {
-    file: BufWriter<File>,
+    file: std::pin::Pin<Box<dyn AsyncWrite + Send>>,
+    /// Characters written so far, before compression.
     bytes: u64,
+}
+
+pub fn is_gzip_path(path: &str) -> bool {
+    path.to_ascii_lowercase().ends_with(".gz")
 }
 
 impl Output {
@@ -640,14 +647,20 @@ pub async fn export_database(
     let started = Instant::now();
     let final_path = PathBuf::from(&request.path);
     let partial = partial_path(&final_path);
+    let raw = BufWriter::with_capacity(WRITE_BUFFER_BYTES, File::create(&partial).await?);
     let mut out = Output {
-        file: BufWriter::with_capacity(WRITE_BUFFER_BYTES, File::create(&partial).await?),
+        file: if is_gzip_path(&request.path) {
+            Box::pin(GzipEncoder::new(raw))
+        } else {
+            Box::pin(raw)
+        },
         bytes: 0,
     };
 
     let outcome = write_everything(conn, &mut out, request, cancel, emit).await;
     let flushed = match &outcome {
-        Ok((_, false)) => out.file.flush().await.map_err(AppError::from),
+        // `shutdown` flushes, and for gzip also writes the closing block that makes the file readable.
+        Ok((_, false)) => out.file.shutdown().await.map_err(AppError::from),
         _ => Ok(()),
     };
     drop(out.file);
@@ -663,9 +676,13 @@ pub async fn export_database(
     match (outcome, flushed) {
         (Ok((rows, false)), Ok(())) => {
             tokio::fs::rename(&partial, &final_path).await?;
+            // The size on disk, which for a compressed file is smaller than what was written.
+            let on_disk = tokio::fs::metadata(&final_path)
+                .await
+                .map_or(out.bytes, |meta| meta.len());
             Ok(ExportSummary {
                 rows,
-                ..finish(out.bytes)
+                ..finish(on_disk)
             })
         }
         (Ok((rows, true)), _) => {
@@ -686,6 +703,13 @@ pub async fn export_database(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_ending_in_gz_means_compressed() {
+        assert!(is_gzip_path("/tmp/dump.sql.gz"));
+        assert!(is_gzip_path("/tmp/DUMP.SQL.GZ"));
+        assert!(!is_gzip_path("/tmp/dump.sql"));
+    }
 
     #[test]
     fn timestamps_are_written_in_utc() {

@@ -6,22 +6,41 @@ use mysql_async::{Column, Value};
 
 use crate::query::cell::{Cell, ColumnShape, TEXT, cell_from_value};
 
+/// What kind of number a column holds. The server's text protocol sends every value as text, so this is how a
+/// number is told from a string: numbers are written without quotes, and in JSON as numbers (decimals excepted).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumberClass {
+    NotANumber,
+    Integer,
+    Float,
+    /// Exact decimals: kept as text everywhere, so no digit is lost.
+    Decimal,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DumpColumn {
     pub shape: ColumnShape,
-    /// DECIMAL values arrive as text but are numbers, so they are written without quotes.
-    pub numeric_text: bool,
+    pub number: NumberClass,
 }
 
 impl DumpColumn {
     pub fn of(column: &Column) -> Self {
-        let numeric_text = matches!(
-            column.column_type(),
-            ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL
-        );
+        let number = match column.column_type() {
+            ColumnType::MYSQL_TYPE_TINY
+            | ColumnType::MYSQL_TYPE_SHORT
+            | ColumnType::MYSQL_TYPE_LONG
+            | ColumnType::MYSQL_TYPE_LONGLONG
+            | ColumnType::MYSQL_TYPE_INT24
+            | ColumnType::MYSQL_TYPE_YEAR => NumberClass::Integer,
+            ColumnType::MYSQL_TYPE_FLOAT | ColumnType::MYSQL_TYPE_DOUBLE => NumberClass::Float,
+            ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => {
+                NumberClass::Decimal
+            }
+            _ => NumberClass::NotANumber,
+        };
         Self {
             shape: ColumnShape::of(column),
-            numeric_text,
+            number,
         }
     }
 }
@@ -99,10 +118,68 @@ pub fn literal(value: &Value, column: DumpColumn) -> String {
             _ => "NULL".to_owned(),
         },
         Value::Bytes(bytes) if column.shape.is_binary => hex_literal(bytes),
-        Value::Bytes(bytes) if column.numeric_text && looks_numeric(bytes) => {
+        Value::Bytes(bytes) if column.number != NumberClass::NotANumber && looks_numeric(bytes) => {
             String::from_utf8_lossy(bytes).into_owned()
         }
         Value::Bytes(bytes) => format!("'{}'", escape_string(&String::from_utf8_lossy(bytes))),
+    }
+}
+
+/// A value as plain text for CSV, with `None` for NULL. Binary values are written as `0x…` hex.
+pub fn plain_text(value: &Value, column: DumpColumn) -> Option<String> {
+    match value {
+        Value::NULL => None,
+        Value::Bytes(bytes) if column.shape.is_binary => Some(if bytes.is_empty() {
+            String::new()
+        } else {
+            hex_literal(bytes)
+        }),
+        Value::Bytes(bytes) => Some(String::from_utf8_lossy(bytes).into_owned()),
+        Value::Int(number) => Some(number.to_string()),
+        Value::UInt(number) => Some(number.to_string()),
+        Value::Float(number) => Some(number.to_string()),
+        Value::Double(number) => Some(number.to_string()),
+        Value::Date(..) | Value::Time(..) => match cell_from_value(
+            value.clone(),
+            if column.shape.is_date_only {
+                column.shape
+            } else {
+                TEXT
+            },
+        ) {
+            Cell::Text(text) => Some(text),
+            _ => None,
+        },
+    }
+}
+
+/// A value as a JSON token: numbers stay numbers, everything else is a string, NULL is `null`.
+/// Decimals are strings on purpose, because a JSON number would be read back as a float.
+pub fn json_value(value: &Value, column: DumpColumn) -> serde_json::Value {
+    match value {
+        Value::NULL => serde_json::Value::Null,
+        Value::Int(number) => (*number).into(),
+        Value::UInt(number) => (*number).into(),
+        Value::Float(number) => serde_json::Number::from_f64(f64::from(*number))
+            .map_or(serde_json::Value::Null, Into::into),
+        Value::Double(number) => {
+            serde_json::Number::from_f64(*number).map_or(serde_json::Value::Null, Into::into)
+        }
+        Value::Bytes(bytes) if column.number == NumberClass::Integer => {
+            let text = String::from_utf8_lossy(bytes);
+            text.parse::<i64>()
+                .map(Into::into)
+                .or_else(|_| text.parse::<u64>().map(Into::into))
+                .unwrap_or_else(|_| text.into_owned().into())
+        }
+        Value::Bytes(bytes) if column.number == NumberClass::Float => {
+            let text = String::from_utf8_lossy(bytes);
+            text.parse::<f64>()
+                .ok()
+                .and_then(serde_json::Number::from_f64)
+                .map_or_else(|| text.into_owned().into(), Into::into)
+        }
+        other => plain_text(other, column).map_or(serde_json::Value::Null, Into::into),
     }
 }
 
@@ -125,28 +202,42 @@ mod tests {
             is_binary: false,
             is_date_only: false,
         },
-        numeric_text: false,
+        number: NumberClass::NotANumber,
     };
     const BINARY_COLUMN: DumpColumn = DumpColumn {
         shape: ColumnShape {
             is_binary: true,
             is_date_only: false,
         },
-        numeric_text: false,
+        number: NumberClass::NotANumber,
     };
     const DATE_COLUMN: DumpColumn = DumpColumn {
         shape: ColumnShape {
             is_binary: false,
             is_date_only: true,
         },
-        numeric_text: false,
+        number: NumberClass::NotANumber,
     };
     const DECIMAL_COLUMN: DumpColumn = DumpColumn {
         shape: ColumnShape {
             is_binary: false,
             is_date_only: false,
         },
-        numeric_text: true,
+        number: NumberClass::Decimal,
+    };
+    const INTEGER_COLUMN: DumpColumn = DumpColumn {
+        shape: ColumnShape {
+            is_binary: false,
+            is_date_only: false,
+        },
+        number: NumberClass::Integer,
+    };
+    const FLOAT_COLUMN: DumpColumn = DumpColumn {
+        shape: ColumnShape {
+            is_binary: false,
+            is_date_only: false,
+        },
+        number: NumberClass::Float,
     };
 
     fn text(value: &str) -> Value {
@@ -241,6 +332,73 @@ mod tests {
         assert_eq!(
             literal(&Value::Time(true, 1, 2, 3, 4, 0), TEXT_COLUMN),
             "'-26:03:04'"
+        );
+    }
+
+    #[test]
+    fn plain_text_has_no_quoting_and_json_keeps_numbers_as_numbers() {
+        assert_eq!(
+            plain_text(&text("it's, \"x\""), TEXT_COLUMN).as_deref(),
+            Some("it's, \"x\"")
+        );
+        assert_eq!(plain_text(&Value::NULL, TEXT_COLUMN), None);
+        assert_eq!(
+            plain_text(&Value::Bytes(vec![0xca, 0xfe]), BINARY_COLUMN).as_deref(),
+            Some("0xcafe")
+        );
+        assert_eq!(
+            plain_text(&Value::Date(2026, 1, 31, 0, 0, 0, 0), DATE_COLUMN).as_deref(),
+            Some("2026-01-31")
+        );
+        assert_eq!(
+            json_value(&Value::UInt(u64::MAX), TEXT_COLUMN),
+            serde_json::json!(18446744073709551615u64)
+        );
+        assert_eq!(
+            json_value(&text("12.50"), DECIMAL_COLUMN),
+            serde_json::json!("12.50")
+        );
+        assert_eq!(
+            json_value(&Value::Double(f64::NAN), TEXT_COLUMN),
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            json_value(&Value::NULL, TEXT_COLUMN),
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            json_value(&Value::Double(0.5), TEXT_COLUMN),
+            serde_json::json!(0.5)
+        );
+    }
+
+    #[test]
+    fn numbers_that_arrive_as_text_are_written_as_numbers_and_strings_stay_strings() {
+        assert_eq!(literal(&text("42"), INTEGER_COLUMN), "42");
+        assert_eq!(literal(&text("-7"), INTEGER_COLUMN), "-7");
+        assert_eq!(literal(&text("0.1"), FLOAT_COLUMN), "0.1");
+        assert_eq!(literal(&text("1e30"), FLOAT_COLUMN), "1e30");
+        assert_eq!(literal(&text("42"), TEXT_COLUMN), "'42'");
+        assert_eq!(literal(&text("4; DROP"), INTEGER_COLUMN), "'4; DROP'");
+        assert_eq!(
+            json_value(&text("42"), INTEGER_COLUMN),
+            serde_json::json!(42)
+        );
+        assert_eq!(
+            json_value(&text("18446744073709551615"), INTEGER_COLUMN),
+            serde_json::json!(18446744073709551615u64)
+        );
+        assert_eq!(
+            json_value(&text("0.25"), FLOAT_COLUMN),
+            serde_json::json!(0.25)
+        );
+        assert_eq!(
+            json_value(&text("42"), TEXT_COLUMN),
+            serde_json::json!("42")
+        );
+        assert_eq!(
+            json_value(&text("12.50"), DECIMAL_COLUMN),
+            serde_json::json!("12.50")
         );
     }
 
