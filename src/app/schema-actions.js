@@ -1,4 +1,5 @@
 import { databaseKey, groupKey } from "../features/schema/tree.js";
+import { newObjectName } from "../features/structure/object-templates.js";
 import * as transitions from "../state/app-state.js";
 
 const DEFAULT_OPEN_GROUP = "tables";
@@ -39,17 +40,26 @@ export function createSchemaActions({ api, store }) {
     toggleDatabase,
     toggleGroup: (connectionId, database, group) =>
       store.update((state) => transitions.toggleExpanded(state, connectionId, groupKey(database, group))),
-    newQuery(connectionId, database) {
+    /** `extra` can carry `initialSql` to put in the editor and `autorun` to run it at once. */
+    newQuery(connectionId, database, extra = {}) {
       const state = store.getState();
       const used = transitions.tabsOf(state, connectionId).filter((tab) => tab.kind === "query").map((tab) => Number(tab.name.replace("Query ", "")));
       const name = `Query ${Math.max(0, ...used) + 1}`;
-      store.update((current) => transitions.openTab(current, { connectionId, database, name, kind: "query" }));
+      store.update((current) => transitions.openTab(current, { connectionId, database, name, kind: "query", ...extra }));
+    },
+    /** A tab for a table, view, routine, trigger or event that does not exist yet. */
+    openNewObject(connectionId, database, kind) {
+      const tabKind = { table: "newtable", view: "viewdef" }[kind] ?? kind;
+      const taken = transitions.tabsOf(store.getState(), connectionId).filter((tab) => tab.isNew && tab.kind === tabKind).map((tab) => tab.name);
+      const name = newObjectName(kind, taken);
+      store.update((current) => transitions.openTab(current, { connectionId, database, name, kind: tabKind, isNew: true }));
     },
     openObject: (target) => store.update((state) => transitions.openTab(state, target)),
     activateTab: (id) => store.update((state) => transitions.activateTab(state, id)),
     closeTab: (id) => store.update((state) => transitions.closeTab(state, id)),
     /** Backend calls bound to one table tab; each logs the SQL that ran. */
     tableData: ({ connectionId, database, name }) => ({
+      openStructure: () => store.update((state) => transitions.openTab(state, { connectionId, database, name, kind: "structure" })),
       browse: (page) => api("browse_table", { connectionId, database, table: name, page }, { label: (result) => result.sql }),
       apply: (changes) =>
         api("apply_row_changes", { connectionId, database, table: name, changes }, { label: (result) => result.statements.join(";\n") }),

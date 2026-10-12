@@ -37,6 +37,8 @@ export function createTableView({ tab, data }) {
   const chips = h("div", { class: "chips" });
   const status = h("span", { class: "muted table-status" });
   const message = h("span", { class: "error-text table-message" });
+  const structureButton = h("button", { type: "button", title: "Columns, indexes and foreign keys", onClick: () => data.openStructure() }, "Structure");
+  structureButton.hidden = !editable;
   const addButton = h("button", { type: "button", onClick: addRow }, "Add row");
   const deleteButton = h("button", { type: "button", onClick: deleteRow }, "Delete row");
   const nullButton = h("button", { type: "button", onClick: setNull }, "Set NULL");
@@ -53,7 +55,7 @@ export function createTableView({ tab, data }) {
   const element = h(
     "div",
     { class: "table-view" },
-    h("div", { class: "table-toolbar" }, filterForm, chips, h("span", { class: "spacer" }), addButton, deleteButton, nullButton, discardButton, applyButton),
+    h("div", { class: "table-toolbar" }, filterForm, chips, h("span", { class: "spacer" }), structureButton, addButton, deleteButton, nullButton, discardButton, applyButton),
     grid.element,
     h("div", { class: "table-footer" }, status, message),
   );

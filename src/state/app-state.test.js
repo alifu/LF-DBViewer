@@ -10,6 +10,7 @@ import {
   activateTab,
   appendLog,
   closeTab,
+  closeTabsWhere,
   initialState,
   openTab,
   removeConnection,
@@ -146,4 +147,14 @@ test("closing a connection drops its tabs and schema", () => {
   assert.deepEqual(state.tabs.map((tab) => tab.name), ["other"]);
   assert.equal(state.schemas.a, undefined);
   assert.equal(state.activeTabIds.a, undefined);
+});
+
+test("tabs can be closed by a condition, leaving the others and picking a neighbour", () => {
+  let state = openTab(openTab(openTab(withTwo(), table("orders")), { ...table("orders"), kind: "structure" }), table("items"));
+  const items = tabsOf(state, "a").find((tab) => tab.name === "items");
+
+  state = closeTabsWhere(state, (tab) => tab.name === "orders");
+
+  assert.deepEqual(tabsOf(state, "a").map((tab) => tab.name), ["items"]);
+  assert.equal(state.activeTabIds.a, items.id);
 });

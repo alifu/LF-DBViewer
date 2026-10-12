@@ -320,6 +320,11 @@ export function createQueryView({ tab, connection, data, storage }) {
   drawDatabases();
   draw();
   void loadColumns();
+  if (tab.initialSql) {
+    editor.setText(tab.initialSql);
+    // Wait a tick so the first draw is on screen before the run starts.
+    if (tab.autorun) setTimeout(() => void run("all"), 0);
+  }
 
   return {
     element,

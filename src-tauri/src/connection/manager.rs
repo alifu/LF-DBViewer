@@ -8,7 +8,7 @@ use mysql_async::{Conn, Opts, OptsBuilder, Pool, PoolConstraints, PoolOpts, SslO
 use tokio::sync::RwLock;
 
 use super::model::{
-    ConnectionInfo, ConnectionProfile, ConnectionSecrets, ConnectionStatus, SslMode,
+    ConnectionInfo, ConnectionProfile, ConnectionSecrets, ConnectionStatus, Engine, SslMode,
 };
 use super::ssh_tunnel::SshTunnel;
 use crate::error::{AppError, AppResult};
@@ -32,6 +32,10 @@ pub struct ActiveConnection {
 impl ActiveConnection {
     pub async fn conn(&self) -> AppResult<Conn> {
         Ok(self.pool.get_conn().await?)
+    }
+
+    pub fn engine(&self) -> Engine {
+        self.info.engine
     }
 
     /// A connection of its own, outside the pool, for a query tab's session.

@@ -150,6 +150,11 @@ export function closeTab(state, id) {
   };
 }
 
+/** Closes every tab for which `matches(tab)` is true, e.g. the tabs of an object that was dropped. */
+export function closeTabsWhere(state, matches) {
+  return state.tabs.filter(matches).reduce((current, tab) => closeTab(current, tab.id), state);
+}
+
 export function tabsOf(state, connectionId) {
   return state.tabs.filter((tab) => tab.connectionId === connectionId);
 }

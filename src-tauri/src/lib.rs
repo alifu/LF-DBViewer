@@ -1,5 +1,6 @@
 mod commands;
 mod connection;
+mod ddl;
 mod error;
 #[cfg(test)]
 mod live_tests;
@@ -14,7 +15,7 @@ use tauri::Manager;
 
 use commands::{
     connection as connection_commands, data as data_commands, profile as profile_commands,
-    query as query_commands, schema as schema_commands,
+    query as query_commands, schema as schema_commands, structure as structure_commands,
 };
 use state::AppState;
 
@@ -48,6 +49,13 @@ pub fn run() {
             query_commands::run_statements,
             query_commands::cancel_query,
             query_commands::list_database_columns,
+            structure_commands::server_options,
+            structure_commands::table_definition,
+            structure_commands::preview_structure_change,
+            structure_commands::apply_structure_change,
+            structure_commands::routine_parameters,
+            structure_commands::preview_definition,
+            structure_commands::apply_definition,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

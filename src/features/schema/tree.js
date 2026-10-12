@@ -33,7 +33,8 @@ export function createSchemaTree({ actions }) {
   const list = h("div", { class: "tree", role: "tree" });
   let last = null;
   const newQuery = h("button", { type: "button", class: "new-query", title: "New query tab (⌘T)", onClick: () => last && actions.newQuery(last.connectionId) }, "New query");
-  const element = h("div", { class: "schema-tree" }, h("div", { class: "tree-search" }, newQuery, search), list);
+  const newDatabase = h("button", { type: "button", class: "new-query", title: "Create a database", onClick: () => last && actions.newDatabase(last.connectionId) }, "New database");
+  const element = h("div", { class: "schema-tree" }, h("div", { class: "tree-search" }, h("div", { class: "tree-buttons" }, newQuery, newDatabase), search), list);
   search.addEventListener("input", () => last && draw(last));
 
   function drawDatabase(connectionId, schema, database, activeTab) {
@@ -41,7 +42,12 @@ export function createSchemaTree({ actions }) {
     const objects = schema.objects[database.name];
     const node = h(
       "div",
-      { class: "tree-node database", title: database.collation ?? "", onClick: () => actions.toggleDatabase(connectionId, database.name) },
+      {
+        class: "tree-node database",
+        title: database.collation ?? "",
+        onClick: () => actions.toggleDatabase(connectionId, database.name),
+        onContextmenu: (event) => actions.showMenu(event, { connectionId, type: "database", database: database.name }),
+      },
       twisty(open),
       h("strong", {}, database.name),
     );
@@ -57,7 +63,11 @@ export function createSchemaTree({ actions }) {
         const groupOpen = search.value !== "" || Boolean(schema.expanded[groupKey(database.name, group.key)]);
         const heading = h(
           "div",
-          { class: "tree-node group", onClick: () => actions.toggleGroup(connectionId, database.name, group.key) },
+          {
+            class: "tree-node group",
+            onClick: () => actions.toggleGroup(connectionId, database.name, group.key),
+            onContextmenu: (event) => actions.showMenu(event, { connectionId, type: "group", database: database.name, group: group.key }),
+          },
           twisty(groupOpen),
           `${group.label} `,
           h("span", { class: "muted" }, String(group.items.length)),
@@ -73,6 +83,7 @@ export function createSchemaTree({ actions }) {
                 class: isActive ? "tree-node leaf active" : "tree-node leaf",
                 title: name,
                 onClick: () => actions.openObject({ connectionId, database: database.name, name, kind: group.kind }),
+                onContextmenu: (event) => actions.showMenu(event, { connectionId, type: "object", database: database.name, name, kind: group.kind }),
               },
               name,
             );

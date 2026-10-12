@@ -5,9 +5,11 @@ import { createSchemaActions } from "./app/schema-actions.js";
 import { createDashboard } from "./features/dashboard/dashboard.js";
 import { createLogPanel } from "./features/log/log-panel.js";
 import { createQueryActions } from "./app/query-actions.js";
+import { createStructureActions } from "./app/structure-actions.js";
 import { createQueryView } from "./features/query/query-view.js";
-import { createDefinitionView } from "./features/schema/definition-view.js";
 import { databaseKey } from "./features/schema/tree.js";
+import { createDesignerView } from "./features/structure/designer-view.js";
+import { createObjectEditor } from "./features/structure/object-editor.js";
 import { openSettings } from "./features/settings/settings-dialog.js";
 import { browserStorage, createThemeController } from "./features/settings/theme.js";
 import { createTableView } from "./features/table/table-view.js";
@@ -19,6 +21,7 @@ import * as transitions from "./state/app-state.js";
 
 const PING_INTERVAL_MS = 15_000;
 const DATA_KINDS = ["table", "view"];
+const DESIGNER_KINDS = ["structure", "newtable"];
 
 // Applied before anything renders, so the first paint already has the right colours.
 const theme = createThemeController({
@@ -32,6 +35,7 @@ const store = createStore(transitions.initialState);
 const log = (entry) => store.update((state) => transitions.appendLog(state, { ...entry, time: new Date() }));
 const api = createApi({ invoke, onLog: log });
 const schema = createSchemaActions({ api, store });
+const structure = createStructureActions({ api, store, schema });
 
 /** A new connection shows its databases, with the profile's default database already open. */
 async function showSchema(info) {
@@ -56,6 +60,8 @@ const workspaceActions = {
   ...schema,
   openSettings: showSettings,
   newQuery,
+  newDatabase: structure.newDatabase,
+  showMenu: structure.showMenu,
   activate: connections.activate,
   newConnection: connections.newConnection,
   async close(id) {
@@ -96,7 +102,9 @@ function createTabView(tab) {
     });
   }
   if (DATA_KINDS.includes(tab.kind)) return createTableView({ tab, data: schema.tableData(tab) });
-  return createDefinitionView({ load: () => schema.definition(tab) });
+  if (DESIGNER_KINDS.includes(tab.kind)) return createDesignerView({ tab, data: structure.designerData(tab) });
+  const connection = store.getState().connections.find((candidate) => candidate.id === tab.connectionId);
+  return createObjectEditor({ tab, data: structure.objectEditorData(tab), engine: connection.engine });
 }
 
 const logPanel = createLogPanel({ onClear: () => store.update(transitions.clearLog) });

@@ -33,13 +33,15 @@ function connectionTab(connection, activeId, actions) {
   );
 }
 
+const hintOf = (tab) => ({ structure: "structure", viewdef: "definition", newtable: "new", query: null })[tab.kind] ?? tab.database;
+
 function objectTab(tab, activeTabId, actions) {
   return h(
     "div",
     { class: tab.id === activeTabId ? "object-tab active" : "object-tab", title: `${tab.database}.${tab.name} (${tab.kind})`, onClick: () => actions.activateTab(tab.id) },
     h("span", {}, tab.name),
     // A query tab's database can change while it is open, so only object tabs show it.
-    tab.kind !== "query" && h("span", { class: "muted" }, tab.database),
+    hintOf(tab) && h("span", { class: "muted" }, hintOf(tab)),
     closeButton(`Close ${tab.name}`, () => actions.closeTab(tab.id)),
   );
 }

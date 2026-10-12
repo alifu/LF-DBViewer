@@ -10,6 +10,9 @@ use crate::error::{AppError, AppResult};
 use crate::query::cell::value_text;
 use crate::sql::qualified;
 
+pub mod definition;
+pub mod routines;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DatabaseInfo {
@@ -55,7 +58,7 @@ pub struct ColumnInfo {
     pub generated: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ObjectKind {
     Table,
@@ -67,7 +70,7 @@ pub enum ObjectKind {
 }
 
 impl ObjectKind {
-    fn keyword(self) -> &'static str {
+    pub fn keyword(self) -> &'static str {
         match self {
             Self::Table => "TABLE",
             Self::View => "VIEW",
@@ -79,15 +82,15 @@ impl ObjectKind {
     }
 }
 
-fn texts(row: Row) -> Vec<Option<String>> {
+pub(crate) fn texts(row: Row) -> Vec<Option<String>> {
     row.unwrap().iter().map(value_text).collect()
 }
 
-fn required(value: Option<&Option<String>>) -> String {
+pub(crate) fn required(value: Option<&Option<String>>) -> String {
     value.cloned().flatten().unwrap_or_default()
 }
 
-fn optional(value: Option<&Option<String>>) -> Option<String> {
+pub(crate) fn optional(value: Option<&Option<String>>) -> Option<String> {
     value.cloned().flatten().filter(|text| !text.is_empty())
 }
 
