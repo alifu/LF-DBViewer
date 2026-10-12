@@ -6,8 +6,11 @@
     </linearGradient>
   </defs>
   <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <!-- database cylinder -->
+  <path d="M232 300v400c0 66 126 120 280 120s280-54 280-120V300z" fill="#EAF4EF"/>
+  <ellipse cx="512" cy="300" rx="280" ry="120" fill="#FFFFFF"/>
   <!-- "LF", drawn as shapes so it renders the same everywhere -->
-  <g fill="#FFFFFF" stroke="#FFFFFF" stroke-width="24" stroke-linejoin="round" transform="translate(-4 0)">
+  <g fill="#1F845A" stroke="#1F845A" stroke-width="24" stroke-linejoin="round" transform="translate(212.7 288) scale(0.58)">
     <path d="M262 322h100v280h120v100H262z"/>
     <path d="M540 322h230v100H640v48h88v95h-88v137H540z"/>
   </g>
