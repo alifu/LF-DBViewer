@@ -1,7 +1,7 @@
 import { dataTable, searchBox } from "../../lib/data-table.js";
 import { confirmDialog, h } from "../../lib/dom.js";
 import { formatBytes } from "../transfer/transfer-state.js";
-import { computeRates, filterByName, formatSeconds, numbersOf, revokablePrivileges, summarizeStatus, visibleProcesses, describeScope } from "./admin-state.js";
+import { computeRates, filterByName, formatSeconds, numbersOf, revokablePrivileges, summarizeStatus, visibleProcesses, describeScope, accountBadges, pushHistory, sparklinePoints } from "./admin-state.js";
 import { openTableStatsDialog } from "./panels-server.js";
 import { openPrivilegeDialog, openUserDialog, openVariableDialog } from "./admin-dialogs.js";
 
