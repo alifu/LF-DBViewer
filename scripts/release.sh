@@ -64,7 +64,7 @@ cask "lf-dbviewer" do
   desc "Light MySQL and MariaDB client with SSH tunnels, a table designer and a relationship diagram"
   homepage "https://github.com/${REPO}"
 
-  depends_on macos: ">= :monterey"
+  depends_on macos: :monterey
 
   app "${APP}.app"
 
