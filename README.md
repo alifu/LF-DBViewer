@@ -1,3 +1,5 @@
+<p align="center"><img src="src-tauri/icons/128x128@2x.png" width="128" alt="LF-DBViewer icon"></p>
+
 # LF-DBViewer
 
 A light MySQL/MariaDB client for macOS, built with Tauri 2: Rust does the database work,
