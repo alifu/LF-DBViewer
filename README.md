@@ -5,6 +5,29 @@
 A light MySQL/MariaDB client for macOS, built with Tauri 2: Rust does the database work,
 the interface is plain HTML, CSS and JavaScript.
 
+## Install
+
+LF-DBViewer is a finished app for macOS 12 or later (Apple silicon and Intel). Installing downloads the
+prebuilt app; nothing is compiled on your Mac.
+
+```bash
+brew install --cask alifu/tap/lf-dbviewer
+```
+
+Or download `LF-DBViewer.zip` from the [latest release](https://github.com/alifu/LF-DBViewer/releases/latest),
+unzip it and drag `LF-DBViewer.app` to Applications.
+
+The app is not signed with an Apple Developer ID, so macOS blocks the first start ("cannot be opened because
+the developer cannot be verified"). Allow it once, either in System Settings → Privacy & Security → "Open Anyway",
+or from the terminal:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/LF-DBViewer.app
+```
+
+Update with `brew upgrade --cask lf-dbviewer`. Remove with `brew uninstall --cask lf-dbviewer`; saved connections
+live in `~/Library/Application Support/com.alifu.lf-dbviewer` and passwords in the macOS Keychain.
+
 ## Develop
 
 Requirements: Rust (the pinned toolchain in `rust-toolchain.toml` installs itself through
@@ -17,6 +40,8 @@ make test      # JavaScript and Rust unit tests
 make test-live # also the tests that need a MySQL/MariaDB server on 127.0.0.1
 make lint      # rustfmt and clippy
 make build     # release build of LF-DBViewer.app
+scripts/release.sh            # universal build and dist/LF-DBViewer.zip
+scripts/release.sh --publish  # also the GitHub release and the Homebrew cask
 ```
 
 ## Preview
