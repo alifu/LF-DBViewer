@@ -142,7 +142,13 @@ async fn establish(
     let tunnel = match &profile.ssh {
         Some(ssh) => {
             let target = (profile.host.clone(), profile.port);
-            let open = SshTunnel::open(ssh, secrets.ssh_secret.as_deref(), target, trust_ssh_host);
+            let open = SshTunnel::open(
+                ssh,
+                secrets.ssh_secret.as_deref(),
+                target,
+                trust_ssh_host,
+                None,
+            );
             Some(within(CONNECT_TIMEOUT, "opening the SSH tunnel", open).await?)
         }
         None => None,
@@ -161,10 +167,17 @@ async fn establish(
         Ok(version) => version,
         Err(error) => {
             let _ = pool.disconnect().await;
+            let refusal = tunnel.as_ref().and_then(SshTunnel::last_error);
             if let Some(tunnel) = &tunnel {
                 tunnel.close().await;
             }
-            return Err(error);
+            // The SSH server's own reason is more useful than the database error that follows from it.
+            return Err(match refusal {
+                Some(reason) => AppError::Ssh(format!(
+                    "{reason}. The server may not allow port forwarding (AllowTcpForwarding in sshd_config)."
+                )),
+                None => error,
+            });
         }
     };
 

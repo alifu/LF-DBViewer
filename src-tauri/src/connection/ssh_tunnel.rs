@@ -30,6 +30,8 @@ struct HostKeyVerifier {
     host: String,
     port: u16,
     trust_unknown: bool,
+    /// `None` is `~/.ssh/known_hosts`.
+    known_hosts: Option<PathBuf>,
     rejection: Arc<Mutex<Option<HostKeyRejection>>>,
 }
 
@@ -42,14 +44,25 @@ impl HostKeyVerifier {
     }
 
     fn verify(&self, key: &PublicKey) -> Result<bool, russh::Error> {
-        match keys::check_known_hosts(&self.host, self.port, key) {
+        let checked = match &self.known_hosts {
+            Some(path) => {
+                keys::known_hosts::check_known_hosts_path(&self.host, self.port, key, path)
+            }
+            None => keys::check_known_hosts(&self.host, self.port, key),
+        };
+        match checked {
             Ok(true) => Ok(true),
             Err(keys::Error::KeyChanged { line }) => {
                 self.reject(HostKeyRejection::Changed { line })
             }
             // Not listed, or there is no known_hosts file yet.
             Ok(false) | Err(_) if self.trust_unknown => {
-                keys::known_hosts::learn_known_hosts(&self.host, self.port, key)?;
+                match &self.known_hosts {
+                    Some(path) => {
+                        keys::known_hosts::learn_known_hosts_path(&self.host, self.port, key, path)?
+                    }
+                    None => keys::known_hosts::learn_known_hosts(&self.host, self.port, key)?,
+                }
                 Ok(true)
             }
             Ok(false) | Err(_) => self.reject(HostKeyRejection::Unknown {
@@ -77,6 +90,8 @@ impl client::Handler for HostKeyVerifier {
 
 pub struct SshTunnel {
     local_port: u16,
+    /// The latest reason the server gave for not forwarding a connection (often: forwarding is not allowed).
+    last_error: Arc<Mutex<Option<String>>>,
     session: Arc<Handle<HostKeyVerifier>>,
     forwarder: JoinHandle<()>,
 }
@@ -163,16 +178,26 @@ async fn forward(
     listener: TcpListener,
     session: Arc<Handle<HostKeyVerifier>>,
     target: (String, u16),
+    last_error: Arc<Mutex<Option<String>>>,
 ) {
     while let Ok((mut socket, _)) = listener.accept().await {
         let session = Arc::clone(&session);
         let (host, port) = target.clone();
+        let last_error = Arc::clone(&last_error);
         tokio::spawn(async move {
-            let Ok(channel) = session
-                .channel_open_direct_tcpip(host, u32::from(port), LOOPBACK, 0)
+            let channel = match session
+                .channel_open_direct_tcpip(host.clone(), u32::from(port), LOOPBACK, 0)
                 .await
-            else {
-                return;
+            {
+                Ok(channel) => channel,
+                Err(error) => {
+                    if let Ok(mut slot) = last_error.lock() {
+                        *slot = Some(format!(
+                            "the SSH server did not open a connection to {host}:{port}: {error}"
+                        ));
+                    }
+                    return;
+                }
             };
             let mut stream = channel.into_stream();
             let _ = tokio::io::copy_bidirectional(&mut socket, &mut stream).await;
@@ -181,20 +206,22 @@ async fn forward(
 }
 
 impl SshTunnel {
-    /// Connects, checks the host key against `~/.ssh/known_hosts`, authenticates and
-    /// starts forwarding. An unknown host is refused unless `trust_unknown_host` is
+    /// Connects, checks the host key against `known_hosts` (`~/.ssh/known_hosts` unless a path is given),
+    /// authenticates and starts forwarding. An unknown host is refused unless `trust_unknown_host` is
     /// set, in which case its key is recorded in known_hosts.
     pub async fn open(
         config: &SshConfig,
         secret: Option<&str>,
         target: (String, u16),
         trust_unknown_host: bool,
+        known_hosts: Option<PathBuf>,
     ) -> AppResult<Self> {
         let rejection = Arc::new(Mutex::new(None));
         let verifier = HostKeyVerifier {
             host: config.host.clone(),
             port: config.port,
             trust_unknown: trust_unknown_host,
+            known_hosts,
             rejection: Arc::clone(&rejection),
         };
         let client_config = Arc::new(client::Config {
@@ -222,10 +249,17 @@ impl SshTunnel {
         let listener = TcpListener::bind((LOOPBACK, 0)).await?;
         let local_port = listener.local_addr()?.port();
         let session = Arc::new(session);
-        let forwarder = tokio::spawn(forward(listener, Arc::clone(&session), target));
+        let last_error = Arc::new(Mutex::new(None));
+        let forwarder = tokio::spawn(forward(
+            listener,
+            Arc::clone(&session),
+            target,
+            Arc::clone(&last_error),
+        ));
 
         Ok(Self {
             local_port,
+            last_error,
             session,
             forwarder,
         })
@@ -255,6 +289,11 @@ impl SshTunnel {
 
     pub fn local_port(&self) -> u16 {
         self.local_port
+    }
+
+    /// Why the SSH server last refused to forward a connection, if it did.
+    pub fn last_error(&self) -> Option<String> {
+        self.last_error.lock().ok().and_then(|slot| slot.clone())
     }
 
     pub fn is_alive(&self) -> bool {
@@ -329,7 +368,7 @@ mod tests {
             auth: SshAuth::Agent,
         };
 
-        let result = SshTunnel::open(&config, None, ("db".into(), 3306), false).await;
+        let result = SshTunnel::open(&config, None, ("db".into(), 3306), false, None).await;
 
         assert!(matches!(result, Err(AppError::Ssh(_))));
     }

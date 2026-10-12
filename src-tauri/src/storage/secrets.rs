@@ -111,3 +111,30 @@ mod tests {
         assert_eq!(store.get("p1:db").unwrap(), None);
     }
 }
+
+#[cfg(test)]
+mod keychain_tests {
+    use super::*;
+
+    /// Talks to the real macOS Keychain. Ignored by default: the first run on a machine may ask for permission.
+    #[test]
+    #[ignore = "uses the real macOS Keychain"]
+    fn the_keychain_stores_reads_replaces_and_deletes_a_secret() {
+        let store = KeychainStore;
+        let key = format!("lfdb-test-{}:db", uuid::Uuid::new_v4().simple());
+
+        let missing = store.get(&key).unwrap();
+        store.set(&key, "first secret").unwrap();
+        let first = store.get(&key).unwrap();
+        store.set(&key, "second 'secret' with ünïcode").unwrap();
+        let second = store.get(&key).unwrap();
+        store.delete(&key).unwrap();
+        let gone = store.get(&key).unwrap();
+        store.delete(&key).unwrap();
+
+        assert_eq!(missing, None);
+        assert_eq!(first.as_deref(), Some("first secret"));
+        assert_eq!(second.as_deref(), Some("second 'secret' with ünïcode"));
+        assert_eq!(gone, None);
+    }
+}

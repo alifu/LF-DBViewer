@@ -2134,3 +2134,270 @@ mod diagram_tests {
         );
     }
 }
+
+// ---- SSH tunnel against a real OpenSSH server ----
+//
+// Needs `LFDB_SSH_PORT` (and optionally LFDB_SSH_HOST, LFDB_SSH_USER, LFDB_SSH_PASSWORD, LFDB_SSH_DIR with the key pair
+// `id_test` (passphrase `keypass`) and `id_plain`), and a database the SSH server can reach, named by
+// LFDB_SSH_TARGET_HOST and LFDB_SSH_TARGET_PORT. See the Makefile target `ssh-up`.
+
+mod ssh_tests {
+    use std::path::PathBuf;
+
+    use mysql_async::prelude::Queryable;
+    use mysql_async::{Conn, OptsBuilder};
+
+    use crate::connection::model::{SshAuth, SshConfig};
+    use crate::connection::ssh_tunnel::SshTunnel;
+    use crate::error::AppError;
+
+    fn env(name: &str, default: &str) -> String {
+        std::env::var(name).unwrap_or_else(|_| default.to_owned())
+    }
+
+    fn config(auth: SshAuth) -> SshConfig {
+        SshConfig {
+            host: env("LFDB_SSH_HOST", "127.0.0.1"),
+            port: env("LFDB_SSH_PORT", "33322").parse().unwrap(),
+            user: env("LFDB_SSH_USER", "tunnel"),
+            auth,
+        }
+    }
+
+    fn target() -> (String, u16) {
+        (
+            env("LFDB_SSH_TARGET_HOST", "lfdb-mariadb"),
+            env("LFDB_SSH_TARGET_PORT", "3306").parse().unwrap(),
+        )
+    }
+
+    fn key(name: &str) -> String {
+        PathBuf::from(env("LFDB_SSH_DIR", "/nonexistent"))
+            .join(name)
+            .display()
+            .to_string()
+    }
+
+    fn known_hosts() -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "lfdb_known_hosts_{}",
+            uuid::Uuid::new_v4().simple()
+        ))
+    }
+
+    async fn version_through(tunnel: &SshTunnel) -> String {
+        let options = OptsBuilder::default()
+            .ip_or_hostname("127.0.0.1")
+            .tcp_port(tunnel.local_port())
+            .user(Some("root"))
+            .pass(None::<String>);
+        let mut conn = Conn::new(options)
+            .await
+            .expect("the database is reachable through the tunnel");
+        let version: Option<String> = conn.query_first("SELECT VERSION()").await.unwrap();
+        version.unwrap()
+    }
+
+    #[tokio::test]
+    #[ignore = "needs an OpenSSH server that refuses forwarding (make ssh-up)"]
+    async fn a_server_that_refuses_forwarding_is_reported_as_such() {
+        let tunnel = SshTunnel::open(
+            &config(SshAuth::Password),
+            Some(&env("LFDB_SSH_PASSWORD", "tunnelpass")),
+            target(),
+            true,
+            Some(known_hosts()),
+        )
+        .await
+        .unwrap();
+        let options = OptsBuilder::default()
+            .ip_or_hostname("127.0.0.1")
+            .tcp_port(tunnel.local_port())
+            .user(Some("root"));
+
+        let attempt = Conn::new(options).await;
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        assert!(
+            attempt.is_err(),
+            "nothing can be reached when forwarding is refused"
+        );
+        let reason = tunnel.last_error().expect("the refusal was recorded");
+        assert!(
+            reason.to_lowercase().contains("refus")
+                || reason.to_lowercase().contains("administratively")
+                || reason.to_lowercase().contains("prohibit")
+                || reason.to_lowercase().contains("denied"),
+            "{reason}"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "needs an OpenSSH server that allows forwarding (make ssh-up)"]
+    async fn password_login_reaches_the_database_and_the_host_key_is_checked_and_remembered() {
+        let known = known_hosts();
+        let secret = env("LFDB_SSH_PASSWORD", "tunnelpass");
+
+        let unknown = SshTunnel::open(
+            &config(SshAuth::Password),
+            Some(&secret),
+            target(),
+            false,
+            Some(known.clone()),
+        )
+        .await;
+        let tunnel = SshTunnel::open(
+            &config(SshAuth::Password),
+            Some(&secret),
+            target(),
+            true,
+            Some(known.clone()),
+        )
+        .await
+        .unwrap();
+        let version = version_through(&tunnel).await;
+        let remembered = SshTunnel::open(
+            &config(SshAuth::Password),
+            Some(&secret),
+            target(),
+            false,
+            Some(known.clone()),
+        )
+        .await;
+        let written = std::fs::read_to_string(&known).unwrap();
+        let wrong = SshTunnel::open(
+            &config(SshAuth::Password),
+            Some("not the password"),
+            target(),
+            true,
+            Some(known.clone()),
+        )
+        .await;
+
+        assert!(
+            matches!(unknown, Err(AppError::SshUnknownHost { ref fingerprint, .. }) if fingerprint.starts_with("SHA256:")),
+            "{:?}",
+            unknown.err()
+        );
+        assert!(!version.is_empty());
+        assert!(
+            remembered.is_ok(),
+            "a host that was trusted once is accepted without asking again"
+        );
+        assert!(
+            written.contains("ssh-ed25519")
+                || written.contains("ssh-rsa")
+                || written.contains("ecdsa"),
+            "{written}"
+        );
+        assert!(matches!(wrong, Err(AppError::Ssh(_))), "{:?}", wrong.err());
+        tunnel.close().await;
+        let _ = std::fs::remove_file(&known);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs an OpenSSH server that allows forwarding (make ssh-up)"]
+    async fn key_files_with_and_without_a_passphrase_work_and_a_wrong_passphrase_does_not() {
+        let known = known_hosts();
+
+        let with_passphrase = SshTunnel::open(
+            &config(SshAuth::KeyFile {
+                path: key("id_test"),
+            }),
+            Some("keypass"),
+            target(),
+            true,
+            Some(known.clone()),
+        )
+        .await
+        .unwrap();
+        let version = version_through(&with_passphrase).await;
+        let wrong = SshTunnel::open(
+            &config(SshAuth::KeyFile {
+                path: key("id_test"),
+            }),
+            Some("nope"),
+            target(),
+            true,
+            Some(known.clone()),
+        )
+        .await;
+        let unauthorised = SshTunnel::open(
+            &config(SshAuth::KeyFile {
+                path: key("id_unknown"),
+            }),
+            None,
+            target(),
+            true,
+            Some(known.clone()),
+        )
+        .await;
+        let missing = SshTunnel::open(
+            &config(SshAuth::KeyFile {
+                path: key("does_not_exist"),
+            }),
+            None,
+            target(),
+            true,
+            Some(known.clone()),
+        )
+        .await;
+
+        assert!(!version.is_empty());
+        assert!(matches!(wrong, Err(AppError::Ssh(_))), "{:?}", wrong.err());
+        assert!(
+            matches!(unauthorised, Err(AppError::Ssh(_))),
+            "a key the server does not know is refused: {:?}",
+            unauthorised.err()
+        );
+        assert!(
+            matches!(missing, Err(AppError::Ssh(_) | AppError::Io(_))),
+            "{:?}",
+            missing.err()
+        );
+        with_passphrase.close().await;
+        let _ = std::fs::remove_file(&known);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs an OpenSSH server and a running ssh-agent holding the key id_plain (SSH_AUTH_SOCK)"]
+    async fn the_ssh_agent_can_sign_in() {
+        let known = known_hosts();
+
+        let tunnel = SshTunnel::open(
+            &config(SshAuth::Agent),
+            None,
+            target(),
+            true,
+            Some(known.clone()),
+        )
+        .await
+        .unwrap();
+        let version = version_through(&tunnel).await;
+        tunnel.close().await;
+        let _ = std::fs::remove_file(&known);
+
+        assert!(!version.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore = "needs an OpenSSH server (make ssh-up)"]
+    async fn a_changed_host_key_is_refused_even_when_unknown_hosts_would_be_trusted() {
+        let known = known_hosts();
+        let secret = env("LFDB_SSH_PASSWORD", "tunnelpass");
+        let other_key = std::fs::read_to_string(format!("{}.pub", key("id_plain"))).unwrap();
+        let mut parts = other_key.split_whitespace();
+        let (kind, data) = (parts.next().unwrap(), parts.next().unwrap());
+        let c = config(SshAuth::Password);
+        std::fs::write(&known, format!("[{}]:{} {kind} {data}\n", c.host, c.port)).unwrap();
+
+        let result = SshTunnel::open(&c, Some(&secret), target(), true, Some(known.clone())).await;
+
+        assert!(
+            matches!(result, Err(AppError::SshHostKeyChanged { line: 1, .. })),
+            "{:?}",
+            result.err()
+        );
+        let _ = std::fs::remove_file(&known);
+    }
+}

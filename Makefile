@@ -1,5 +1,5 @@
 # Everything is driven from the terminal: `make dev`, `make test`, `make build`.
-.PHONY: install dev test test-live test-live-mariadb mariadb-up mariadb-down lint build clean
+.PHONY: install dev test test-live test-live-mariadb test-ssh mariadb-up mariadb-down lint build clean
 
 install:
 	npm install
@@ -26,6 +26,16 @@ mariadb-down:
 
 test-live-mariadb:
 	cd src-tauri && LFDB_TEST_HOST=127.0.0.1 LFDB_TEST_PORT=$(MARIADB_PORT) LFDB_TEST_USER=root cargo test -- --include-ignored
+
+# Real SSH tunnel tests against an OpenSSH server in Docker (agent sign-in included). Needs Docker.
+test-ssh:
+	scripts/ssh-test-env.sh up
+	@set -e; DIR=$${LFDB_SSH_DIR:-$${TMPDIR:-/tmp}/lfdb-ssh-test}; export LFDB_SSH_DIR=$$DIR LFDB_SSH_TARGET_HOST=lfdb-ssh-db; \
+	  cd src-tauri && cargo test ssh_tests::a_server_that_refuses -- --include-ignored; cd ..; \
+	  scripts/ssh-test-env.sh allow; \
+	  eval "$$(ssh-agent -s)" >/dev/null; ssh-add -q $$DIR/id_plain; \
+	  (cd src-tauri && cargo test ssh_tests -- --include-ignored --skip a_server_that_refuses); status=$$?; \
+	  ssh-agent -k >/dev/null; scripts/ssh-test-env.sh down; exit $$status
 
 lint:
 	cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings
