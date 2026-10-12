@@ -173,6 +173,9 @@ export function createStructureActions({ api, store, schema }) {
         { label: "New query here", onSelect: () => schema.newQuery(connectionId, database) },
         { label: "Refresh", onSelect: () => refreshTree(connectionId) },
         "-",
+        { label: "Export database…", onSelect: () => schema.openTransfer(connectionId, database, "export") },
+        { label: "Import SQL file…", onSelect: () => schema.openTransfer(connectionId, database, "import") },
+        "-",
         { label: "Alter database…", onSelect: act("Alter database", () => alterDatabase(connectionId, database)) },
         { label: "Drop database…", danger: true, onSelect: act("Drop database", () => dropDatabase(connectionId, database)) },
       ];
@@ -187,6 +190,7 @@ export function createStructureActions({ api, store, schema }) {
         return [
           { label: "Open data", onSelect: open("table") },
           { label: "Structure…", onSelect: open("structure") },
+          { label: "Export table…", onSelect: () => schema.openTransfer(connectionId, database, "export", { tables: [name] }) },
           "-",
           { label: "Truncate…", danger: true, onSelect: act("Truncate table", () => truncateTable(connectionId, database, name)) },
           drop,

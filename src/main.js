@@ -6,8 +6,11 @@ import { createDashboard } from "./features/dashboard/dashboard.js";
 import { createLogPanel } from "./features/log/log-panel.js";
 import { createQueryActions } from "./app/query-actions.js";
 import { createStructureActions } from "./app/structure-actions.js";
+import { createTransferActions } from "./app/transfer-actions.js";
 import { createQueryView } from "./features/query/query-view.js";
 import { databaseKey } from "./features/schema/tree.js";
+import { createExportView } from "./features/transfer/export-view.js";
+import { createImportView } from "./features/transfer/import-view.js";
 import { createDesignerView } from "./features/structure/designer-view.js";
 import { createObjectEditor } from "./features/structure/object-editor.js";
 import { openSettings } from "./features/settings/settings-dialog.js";
@@ -36,6 +39,7 @@ const log = (entry) => store.update((state) => transitions.appendLog(state, { ..
 const api = createApi({ invoke, onLog: log });
 const schema = createSchemaActions({ api, store });
 const structure = createStructureActions({ api, store, schema });
+const transfer = createTransferActions({ api, store, schema });
 
 /** A new connection shows its databases, with the profile's default database already open. */
 async function showSchema(info) {
@@ -50,7 +54,7 @@ async function confirmLosingEdits(tabIds, what) {
   if (!workspace.hasUnsavedChanges(tabIds)) return true;
   return confirmDialog({
     title: "Discard unsaved changes?",
-    body: `${what} has unsaved changes: edited rows or query text that was not run.`,
+    body: `${what} has unsaved changes or a job in progress: edited rows, query text that was not run, or a running export or import.`,
     confirmLabel: "Discard",
     danger: true,
   });
@@ -102,6 +106,8 @@ function createTabView(tab) {
     });
   }
   if (DATA_KINDS.includes(tab.kind)) return createTableView({ tab, data: schema.tableData(tab) });
+  if (tab.kind === "export") return createExportView({ tab, data: transfer.exportData(tab) });
+  if (tab.kind === "import") return createImportView({ tab, data: transfer.importData(tab) });
   if (DESIGNER_KINDS.includes(tab.kind)) return createDesignerView({ tab, data: structure.designerData(tab) });
   const connection = store.getState().connections.find((candidate) => candidate.id === tab.connectionId);
   return createObjectEditor({ tab, data: structure.objectEditorData(tab), engine: connection.engine });

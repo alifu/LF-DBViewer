@@ -47,6 +47,11 @@ export function createSchemaActions({ api, store }) {
       const name = `Query ${Math.max(0, ...used) + 1}`;
       store.update((current) => transitions.openTab(current, { connectionId, database, name, kind: "query", ...extra }));
     },
+    /** An export or import tab; `extra` can carry `tables` to export only those. */
+    openTransfer(connectionId, database, kind, extra = {}) {
+      const name = kind === "import" ? `Import into ${database}` : `Export ${extra.tables?.length === 1 ? extra.tables[0] : database}`;
+      store.update((current) => transitions.openTab(current, { connectionId, database, name, kind, ...extra }));
+    },
     /** A tab for a table, view, routine, trigger or event that does not exist yet. */
     openNewObject(connectionId, database, kind) {
       const tabKind = { table: "newtable", view: "viewdef" }[kind] ?? kind;

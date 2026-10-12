@@ -17,6 +17,14 @@ make lint      # rustfmt and clippy
 make build     # release build of LF-DBViewer.app
 ```
 
+## What it does
+
+- Connect to MySQL and MariaDB, directly or through an SSH tunnel; passwords are kept in the macOS Keychain.
+- Browse and edit table data (big tables stream in as you scroll), run SQL with a multi-result editor.
+- Design tables, indexes and foreign keys, edit views, routines, triggers and events, with the SQL shown before it runs.
+- Export a database to a SQL file that loads back identically, and import SQL files of any size.
+- Light and dark themes (Settings, or ⌘,).
+
 ## Layout
 
 - `src/`: interface, grouped by feature (`features/`), with pure state in `state/` and helpers in `lib/`.

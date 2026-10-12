@@ -33,7 +33,8 @@ function connectionTab(connection, activeId, actions) {
   );
 }
 
-const hintOf = (tab) => ({ structure: "structure", viewdef: "definition", newtable: "new", query: null })[tab.kind] ?? tab.database;
+const TAB_HINTS = { structure: "structure", viewdef: "definition", newtable: "new", query: null, export: null, import: null };
+const hintOf = (tab) => (tab.kind in TAB_HINTS ? TAB_HINTS[tab.kind] : tab.database);
 
 function objectTab(tab, activeTabId, actions) {
   return h(

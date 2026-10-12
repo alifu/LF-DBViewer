@@ -8,20 +8,24 @@ mod query;
 mod schema;
 mod sql;
 mod sql_split;
+mod sql_stream;
 mod state;
 mod storage;
+mod transfer;
 
 use tauri::Manager;
 
 use commands::{
     connection as connection_commands, data as data_commands, profile as profile_commands,
     query as query_commands, schema as schema_commands, structure as structure_commands,
+    transfer as transfer_commands,
 };
 use state::AppState;
 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             app.manage(AppState::new(&data_dir));
@@ -56,6 +60,9 @@ pub fn run() {
             structure_commands::routine_parameters,
             structure_commands::preview_definition,
             structure_commands::apply_definition,
+            transfer_commands::export_database,
+            transfer_commands::import_sql_file,
+            transfer_commands::cancel_transfer,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

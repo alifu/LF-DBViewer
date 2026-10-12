@@ -1,0 +1,21 @@
+.transfer { height: 100%; overflow-y: auto; padding: 16px 20px 24px; }
+.transfer h2 { margin-bottom: 12px; }
+.transfer-body { max-width: 920px; }
+.transfer-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+.transfer-group { margin: 0 0 12px; padding: 8px 12px 10px; border: 1px solid var(--border); border-radius: var(--radius); }
+.transfer-group legend { padding: 0 6px; font-weight: 600; }
+.transfer-links { display: flex; gap: 4px; margin-bottom: 4px; }
+.transfer-list { display: flex; flex-direction: column; gap: 2px; max-height: 240px; overflow-y: auto; }
+.transfer-group .check, .transfer-group .field { margin-bottom: 4px; }
+.transfer-file { display: flex; gap: 8px; margin: 8px 0; }
+.transfer-file input { flex: 1; }
+.transfer-status { margin: 4px 0 10px; font-weight: 600; }
+.transfer-rows { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 10px; max-height: 320px; overflow-y: auto; }
+.transfer-row { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(120px, auto) 140px; gap: 10px; align-items: center; padding: 4px 10px; border-bottom: 1px solid var(--border); }
+.transfer-row:last-child { border-bottom: none; }
+progress { height: 8px; accent-color: var(--accent); }
+progress.wide { width: 100%; height: 12px; margin-bottom: 10px; }
+.ok-text { color: var(--ok); overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.import-errors { margin-bottom: 10px; }
+.import-error { padding: 8px 10px; margin-bottom: 6px; border: 1px solid var(--border); border-radius: var(--radius); user-select: text; -webkit-user-select: text; }
+.import-error pre { margin: 4px 0 0; font: 12px/1.4 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); }
